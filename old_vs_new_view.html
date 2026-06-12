@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ISP Recharge Migration — Old vs New View (5 Sample Cases)</title>
+<style>
+  :root{
+    --old:#0a7a3d; --oldbg:#e8f6ee;
+    --lookup:#b25b00; --lookupbg:#fdf1e2;
+    --const:#1259a6; --constbg:#e9f1fb;
+    --case:#5b2d91; --casebg:#f0eafa;
+    --mint:#9c1d7a; --mintbg:#fbe9f5;
+    --tbd:#8a8a00; --tbdbg:#fbfbe0;
+    --null:#666; --nullbg:#f0f0f0;
+    --rule:#0e6e6e; --rulebg:#e3f4f4;
+  }
+  *{box-sizing:border-box}
+  body{font-family:'Segoe UI',system-ui,sans-serif;margin:0;background:#f4f5f7;color:#1c1e21;font-size:13px}
+  header{background:#16243a;color:#fff;padding:16px 24px}
+  header h1{margin:0;font-size:19px}
+  header p{margin:5px 0 0;color:#9fb3d1;font-size:12px}
+  .tabs{display:flex;gap:6px;padding:12px 24px 0;background:#16243a;flex-wrap:wrap}
+  .tab{padding:9px 16px;border-radius:8px 8px 0 0;background:#22344f;color:#cfdcef;cursor:pointer;font-weight:600;font-size:12.5px;border:none}
+  .tab.active{background:#f4f5f7;color:#16243a}
+  .legend{display:flex;gap:8px;flex-wrap:wrap;padding:12px 24px;align-items:center}
+  .chip{padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700}
+  .chip.OLD{color:var(--old);background:var(--oldbg)}
+  .chip.LOOKUP{color:var(--lookup);background:var(--lookupbg)}
+  .chip.API{color:var(--lookup);background:var(--lookupbg)}
+  .chip.CONST{color:var(--const);background:var(--constbg)}
+  .chip.CASE{color:var(--case);background:var(--casebg)}
+  .chip.RULE{color:var(--rule);background:var(--rulebg)}
+  .chip.MINT{color:var(--mint);background:var(--mintbg)}
+  .chip.TBD{color:var(--tbd);background:var(--tbdbg)}
+  .legend span.lbl{font-size:11px;color:#555;margin-right:2px}
+  .casepane{display:none;padding:0 24px 40px}
+  .casepane.active{display:block}
+  .banner{background:#fff;border-left:5px solid #16243a;border-radius:6px;padding:12px 16px;margin:4px 0 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  .banner b{font-size:14px}
+  .banner .rule{color:#444;margin-top:4px;font-size:12.5px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+  @media(max-width:1100px){.cols{grid-template-columns:1fr}}
+  .side-title{font-size:14px;font-weight:800;letter-spacing:.06em;margin:6px 0 10px;color:#16243a}
+  .side-title.newW{color:#5b2d91}
+  .card{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden}
+  .card h3{margin:0;padding:9px 14px;font-size:12.5px;background:#eef1f5;border-bottom:1px solid #e0e4ea;color:#16243a}
+  .card h3 .svc{font-weight:400;color:#667;font-size:11px}
+  .card.absent h3{background:#f7f7f7;color:#999}
+  .card.absent .why{padding:10px 14px;color:#888;font-style:italic}
+  table{width:100%;border-collapse:collapse}
+  td{padding:4px 10px;border-bottom:1px solid #f0f2f5;vertical-align:top;word-break:break-word}
+  td.f{width:30%;font-family:Consolas,monospace;font-size:11.5px;color:#333;font-weight:600}
+  td.v{width:46%;font-family:Consolas,monospace;font-size:11.5px}
+  td.s{width:24%;font-size:10.5px;color:#666}
+  tr.t-OLD td.v{color:var(--old);background:var(--oldbg)}
+  tr.t-LOOKUP td.v,tr.t-API td.v{color:var(--lookup);background:var(--lookupbg)}
+  tr.t-CONST td.v{color:var(--const);background:var(--constbg)}
+  tr.t-CASE td.v{color:var(--case);background:var(--casebg);font-weight:700}
+  tr.t-RULE td.v{color:var(--rule);background:var(--rulebg);font-weight:700}
+  tr.t-MINT td.v{color:var(--mint);background:var(--mintbg)}
+  tr.t-TBD td.v{color:var(--tbd);background:var(--tbdbg)}
+  tr.t-NULL td.v{color:var(--null);background:var(--nullbg)}
+  .warn{background:#fff4e5;border-left:4px solid #e8901a;padding:8px 12px;border-radius:4px;margin:0 0 14px;font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>ISP Recharge Ticket Migration — Old vs New, 5 Sample Cases <span style="font-size:12px;color:#9fb3d1">(v2 — Jaivin's derivations 1–21 applied)</span></h1>
+  <p>Real production samples (data as of 2026-06-12 IST). Old source: Snowflake/Metabase live replicas. New schemas: csp-os-yaml/services migration SQL. plan_id &amp; service_address per CSP Migration Runbook (those two fields ONLY). csp_id via csp_gateway_service.csp_account. Customer enrichment via customer.i2e1.in GetCustomerByAccount (live-verified).</p>
+</header>
+<div class="tabs" id="tabs"></div>
+<div class="legend">
+  <span class="lbl">Provenance:</span>
+  <span class="chip OLD">OLD — direct old-source value</span>
+  <span class="chip LOOKUP">LOOKUP — mapping table / runbook rule</span>
+  <span class="chip API">API — GetCustomerByAccount</span>
+  <span class="chip RULE">RULE — Jaivin's derivation (this round)</span>
+  <span class="chip CONST">CONST — constant / default</span>
+  <span class="chip CASE">CASE — 5-case definition</span>
+  <span class="chip MINT">MINT — new id at migration</span>
+  <span class="chip TBD">TBD — still pending</span>
+</div>
+<div id="panes"></div>
+
+<script>
+const CASES = [
+{
+ id:1, title:"1 · ACTIVE + candidate EXISTS", nas:"281474977397447",
+ rule:"No open ROUTER_PICKUP · isp_expiry_tracker.expiry_date 2027-01-15 &gt; today · recharge_tickets has STATUS=PENDING row (335103) → CLOS ACTIVE, TAS candidate ACTION_REQUIRED",
+ warn:"⚠ This customer has NO CLAIMED ticket ever (only the PENDING one) → recharge_gates.recharge_reference_id (= last claimed ticket id) has no value, but the column is NOT NULL and part of UNIQUE(connection_id, recharge_reference_id). Rule needed for zero-claimed-ticket customers.",
+ old:[
+  {t:"isp_expiry_tracker (row 104002)",rows:[["isp_expiry_tracker_id","104002"],["partner_id","281749855022004"],["nas_id","281474977397447"],["expiry_date","2027-01-15T12:06:00+05:30"],["plan_status","ACTIVE"],["plan_id","1"],["is_olt_router","TRUE"],["validation_source","ASSUMED"],["is_payg","TRUE"],["created_at","2026-01-20T07:11:18+05:30"],["updated_at","2026-04-05T12:43:17+05:30"]]},
+  {t:"recharge_tickets (PENDING row 335103)",rows:[["recharge_tickets_id","335103"],["recharge_request_id","565475"],["partner_id","281749855022004"],["nas_id","281474977397447"],["start_date","2027-01-15T00:00:00+05:30"],["expiry_date","2027-02-13T23:59:59+05:30"],["partner_plan_id","1"],["incentive_eligible","TRUE"],["incentive_claimed","FALSE"],["incentive_claim_date","NULL"],["customer_name","IX Device"],["customer_phone","9911296554"],["device_id","GX148844"],["wan_type","PPPoE"],["identifier","irshad6554"],["transaction_id","ISP-281749855022004-20260405T071317Z"],["fixed_commission","264.6"],["status","PENDING"],["created_at","2026-04-05T12:43:17+05:30"]]},
+  {t:"recharge_tickets (last CLAIMED)",absent:"NONE — this customer has no CLAIMED ticket in history ⚠"},
+  {t:"recharge_requests (row 565475)",rows:[["recharge_request_id","565475"],["customer_reference_id","custGen_9911296554_197536343_0"],["partner_id","281749855022004"],["nas_id","281474977397447"],["customer_plan_start","2027-01-14T05:30:00+05:30"],["customer_plan_expiry","2027-02-11T05:30:00+05:30"],["requested_speed","50"],["request_status","PROCESSED"],["request_source","custGen"],["customer_account_id","281749855023763"],["customer_paid_amount","500"],["created_at","2026-04-05T12:43:17+05:30"]]},
+  {t:"t_device (row 344683)",rows:[["device_id","GX148844"],["mac","B4:86:18:94:10:42"],["nasid","281474977397447"],["lco_account_id","281749855022004"],["user_account_id","281749855023763"],["serial","251006007091"],["type / product","ONT / HOME_ROUTER"],["status","INSTALLED"],["is_lost","FALSE"]]},
+  {t:"tasks (ROUTER_PICKUP)",absent:"No open pickup task (status 0/1) for this NAS"},
+  {t:"GetCustomerByAccount API (accountId=281749855023763) — live response",rows:[["name","IX Device"],["mobile","9911296554"],["deviceId","GX148844"],["nasid","281474977397447"],["lcoAccountId","281749855022004"],["planStartTime","2027-01-14T00:00:00Z"],["planExpiryTime","2027-02-11T11:30:00Z"],["status","Active"],["wan_type / identifier","⚠ NOT present in API response (settings=null)"]]},
+  {t:"t_wg_customer — runbook support (service_address)",rows:[["account_id","281749855023763"],["mobile","9911296554"],["address (raw JSON)","{\"home\":\"F 91 1st floor jj calony wazirpur\",\"street\":\"Badi masjid\",\"address\":\"\",\"pincode\":\"110052\",\"city\":\"Delhi\"}"]]},
+  {t:"t_router_user_mapping — runbook support (plan_id)",rows:[["mobile","9911296554"],["selected_plan_id","14733"],["last_recharge_ist","2027-01-14T05:30"],["last_expiry_ist","2027-02-11T17:00"]]}
+ ],
+ neu:{
+  connections:[["connection_id","(new UUID)","MINT","minted at INSERT"],["customer_id","281749855023763","OLD","recharge_requests.customer_account_id = t_device.user_account_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_gateway_service.csp_account.csp_id WHERE partner_id=281749855022004 (format: a0a7d6) — CSP must be onboarded first"],["zone_id","TBD","TBD","no derivation given yet"],["service_address","\"F 91 1st floor jj calony wazirpur, Badi masjid, 110052, Delhi\"::jsonb","LOOKUP","flatten(t_wg_customer.ADDRESS): home, street, address, pincode, city"],["plan_id","14733","LOOKUP","runbook last_plan.selected_plan_id (t_router_user_mapping latest paid)"],["current_state","ACTIVE","CASE","case 1 definition"],["state_timestamp","TBD","TBD",""],["pause_reason","NULL","NULL","not paused"],["pause_count","TBD","TBD","default 0"],["p76_timer_start","NULL","NULL","not pending-deactivation"],["retry_count","0","CONST","default"],["retry_exhausted","FALSE","CONST","default"],["installation_complete_at","TBD","TBD",""],["activated_at","TBD","TBD",""],["deactivated_at","NULL","NULL",""],["total_active_duration / total_pause_duration","TBD","TBD","default 0"],["version","1","CONST","default"],["correlation_id / causation_id","TBD","TBD",""],["deactivation_reason","NULL","NULL",""],["prior_caeo_state","TBD","TBD",""],["latest_recharge_window_end","2027-01-15T12:06:00+05:30","OLD","isp_expiry_tracker.expiry_date"],["created_at / updated_at","TBD","TBD",""]],
+  cas:[["connection_id","(same minted UUID)","MINT",""],["customer_id","281749855023763","OLD","recharge_requests.customer_account_id"],["caeo_state","CAEO_STATE_ENABLED","RULE","#7: case 1 → ENABLED"],["entitlement_end","2027-02-11T05:30:00+05:30","RULE","#1: customer recharge end ← recharge_requests.customer_plan_expiry"],["supply_disruption_start","NULL","RULE","#8: NULL except case 3"],["cumulative_supply_disruption","0","CONST","default"],["prior_access_state","NULL","RULE","#9: NULL for all"],["payment_reference_id","custGen_9911296554_197536343_0","OLD","recharge_requests.customer_reference_id"],["closed_at","NULL","NULL",""],["version","1","CONST","default"],["correlation_id / causation_id","TBD","TBD",""],["cl_state","ACTIVE","CASE","mirrors connections.current_state"],["created_at / updated_at","TBD","TBD",""]],
+  gates:[["id","(new UUID)","MINT","gen_random_uuid()"],["connection_id","(same minted UUID)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account by partner_id 281749855022004"],["detection_source","MIGRATION","CONST","enum CSP/TELEMETRY/MIGRATION"],["recharge_reference_id","⚠ NO VALUE — no CLAIMED ticket exists","RULE","#10: last CLAIMED recharge_tickets_id — none for this customer; NOT NULL col → rule needed"],["window_start","2026-12-16T12:06:00+05:30 (= expiry − 30d) ⚠ confirm","RULE","#3+#14: from isp_expiry_tracker — tracker has only expiry_date, so derived as expiry − recharge_period_days(30)"],["window_end","2027-01-15T12:06:00+05:30","RULE","#2+#14: isp_expiry_tracker.expiry_date"],["recharge_period_days","30","RULE","#11: 30 for all"],["confirmation_timestamp","NOW() at migration run","RULE","Q4: code sets Instant.now() at gate creation in every path — see notes"],["approaching_emitted","TRUE","RULE","#12: TRUE for 1,3,4,5"],["expired_emitted","FALSE","RULE","#13: TRUE only for 3,4,5"],["created_at","TBD","TBD","Jaivin will confirm"],["updated_at","TBD","TBD",""]],
+  oblig:[["obligation_ref","(new ref)","MINT","must equal TAS authority_entity_id"],["connection_id","(same minted UUID)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account by partner_id"],["window_end","2027-01-15T12:06:00+05:30","RULE","#5+#14: ISP expiry ← isp_expiry_tracker.expiry_date"],["reason","PROACTIVE","RULE","#15: ACTIVE CLOS → PROACTIVE"],["status","OPEN","CONST","only ACTION_REQUIRED migrates; 1 OPEN per connection (unique idx)"],["customer_entitlement_end","2027-02-11T05:30:00+05:30","RULE","#5: customer expiry ← recharge_requests.customer_plan_expiry"],["created_at","TBD","TBD",""],["updated_at","TBD","TBD",""],["resolved_at","NULL","NULL",""]],
+  cand:[["execution_candidate_id","(new UUID)","MINT",""],["state_version","0","CONST","default"],["authority_entity_id","(= obligation_ref)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account by partner_id"],["connection_id","(same minted UUID)","MINT",""],["customer_id","281749855023763","OLD","recharge_requests.customer_account_id"],["candidate_type","RECHARGE_OBLIGATION","CONST",""],["task_family","RECHARGE","CONST",""],["aggregation_type","BATCH","CONST",""],["state","ACTION_REQUIRED","CASE","case 1 definition"],["reason_code","TBD","TBD","not given — same as latest_attention_reason? confirm"],["reason_display_template","TBD","TBD","NOT NULL"],["deadline_at","TBD","TBD",""],["obligation_window_start","2026-12-16T12:06:00+05:30 (= expiry − 30d) ⚠ confirm","RULE","#6+#14: from isp_expiry_tracker (only expiry_date exists → derived −30d)"],["obligation_window_end","2027-01-15T12:06:00+05:30","RULE","#6+#14: isp_expiry_tracker.expiry_date"],["object_id","TBD","TBD","NOT NULL"],["locality","TBD","TBD","NOT NULL"],["batch_key","TBD","TBD","NOT NULL"],["incident_key","NULL","NULL",""],["is_csp_actionable","TRUE","CONST","default"],["threshold_state","NORMAL","RULE","#16: NORMAL for all"],["latest_attention_at","NOW() at migration run","RULE","#17"],["latest_attention_version","1","CONST","default"],["latest_attention_type","TBD","TBD","enum; NOT NULL"],["latest_attention_reason","SUPPLY_RECHARGE_NEEDED ⚠ not in code enum","RULE","#18 — ReasonCode enum only has SUPPLY_RECHARGE_NEEDED_PROACTIVE / _REACTIVE; confirm exact value"],["acked_attention_version","0","CONST","default"],["commission_status","UNCLAIMED","OLD","incentive_claimed=FALSE → UNCLAIMED"],["commission_claimed_at","NULL","OLD","incentive_claim_date (empty)"],["commission_disbursed_at","NULL","NULL",""],["resolved_at / cancelled_at / cancellation_context","NULL","NULL","state is ACTION_REQUIRED"],["customer_name","IX Device","API","#20: GetCustomerByAccount(281749855023763).name — live-verified"],["connection_short_id","NULL","RULE","#19: NULL for all"],["wan_type","⚠ NOT in API response","API","#20 says API, but response has no wanType key (settings=null) — confirm source"],["identifier","⚠ NOT in API response","API","#20 says API, but response has no identifier key — confirm source"],["device_id","GX148844","API","#20: GetCustomerByAccount.deviceId — live-verified"],["customer_phone","9911296554","API","#20: GetCustomerByAccount.mobile — live-verified"],["speed_limit","50","OLD","recharge_requests.requested_speed"],["execution_id","NULL","RULE","#21: NULL for all"],["flow_type","NULL","RULE","#21: NULL for all"],["renewal_execution_status / sub_status","NULL","RULE","#21: NULL for all"],["created_at / updated_at","TBD","TBD",""]]
+ }
+},
+{
+ id:2, title:"2 · ACTIVE + candidate DOES NOT EXIST", nas:"281474977310435",
+ rule:"No open ROUTER_PICKUP · expiry_date 2027-02-25 &gt; today · NO PENDING recharge ticket → CLOS ACTIVE, no TAS candidate",
+ old:[
+  {t:"isp_expiry_tracker (row 62234)",rows:[["isp_expiry_tracker_id","62234"],["partner_id","281749854635402"],["nas_id","281474977310435"],["expiry_date","2027-02-25T23:59:59+05:30"],["plan_status","ACTIVE"],["plan_id","1"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","FALSE"],["updated_at","2026-02-08T08:32:58+05:30"]]},
+  {t:"recharge_tickets (PENDING)",absent:"No PENDING row for this NAS"},
+  {t:"recharge_tickets (last CLAIMED, row 100905)",rows:[["recharge_tickets_id","100905"],["status","CLAIMED"],["expiry_date","2026-03-09T23:59:59+05:30"],["updated_at","2026-02-08T06:29:56+05:30"]]},
+  {t:"recharge_requests (latest, row 831970)",rows:[["recharge_request_id","831970"],["customer_reference_id","custGen_9560405262_202554339_0"],["partner_id","281749854635402"],["nas_id","281474977310435"],["customer_plan_start","2026-06-02T14:36:05+05:30"],["customer_plan_expiry","2026-06-30T14:36:05+05:30"],["requested_speed","100"],["request_status","PROCESSED"],["request_source","custGen"],["customer_account_id","281749854838240"],["customer_paid_amount","500"],["created_at","2026-06-02T14:36:05+05:30"]]},
+  {t:"t_device (row 292619)",rows:[["device_id","GX114667"],["mac","B4:86:18:4F:7B:02"],["nasid","281474977310435"],["lco_account_id","281749854635402"],["user_account_id","281749854838240"],["serial","250606016800"],["type / product","ONT / HOME_ROUTER"],["status","INSTALLED"],["is_lost","FALSE"]]},
+  {t:"tasks (ROUTER_PICKUP)",absent:"No open pickup task (status 0/1) for this NAS"},
+  {t:"t_wg_customer — runbook support (service_address)",rows:[["account_id","281749854838240"],["mobile","9560405262"],["address (raw JSON)","{\"home\":\"h no 18 sainik enclave mohan garden\",\"street\":\"new rising star public school\",\"address\":\"Plot no 24 &25 sainik enclave Mohan garden Uttam Nagar new Delhi, Mohan Garden, Vikas Nagar\",\"pincode\":\"110059\",\"city\":\"Delhi\"}"]]},
+  {t:"t_router_user_mapping — runbook support (plan_id)",rows:[["mobile","9560405262"],["selected_plan_id","15594"],["last_recharge_ist","2026-06-02T14:36"],["last_expiry_ist","2026-06-30T17:00"]]}
+ ],
+ neu:{
+  connections:[["connection_id","(new UUID)","MINT",""],["customer_id","281749854838240","OLD","recharge_requests.customer_account_id = t_device.user_account_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854635402"],["zone_id","TBD","TBD",""],["service_address","\"h no 18 sainik enclave mohan garden, new rising star public school, Plot no 24 &25 sainik enclave Mohan garden Uttam Nagar new Delhi, Mohan Garden, Vikas Nagar, 110059, Delhi\"::jsonb","LOOKUP","flatten(t_wg_customer.ADDRESS)"],["plan_id","15594","LOOKUP","runbook last_plan.selected_plan_id"],["current_state","ACTIVE","CASE","case 2 definition"],["state_timestamp","TBD","TBD",""],["pause_reason","NULL","NULL",""],["pause_count","TBD","TBD","default 0"],["p76_timer_start","NULL","NULL",""],["retry_count","0","CONST",""],["retry_exhausted","FALSE","CONST",""],["installation_complete_at","TBD","TBD",""],["activated_at","TBD","TBD",""],["deactivated_at","NULL","NULL",""],["total_active_duration / total_pause_duration","TBD","TBD","default 0"],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["deactivation_reason","NULL","NULL",""],["prior_caeo_state","TBD","TBD",""],["latest_recharge_window_end","2027-02-25T23:59:59+05:30","OLD","isp_expiry_tracker.expiry_date"],["created_at / updated_at","TBD","TBD",""]],
+  cas:[["connection_id","(same minted UUID)","MINT",""],["customer_id","281749854838240","OLD",""],["caeo_state","CAEO_STATE_ENABLED","RULE","#7: case 2 → ENABLED"],["entitlement_end","2026-06-30T14:36:05+05:30","RULE","#1: recharge_requests.customer_plan_expiry"],["supply_disruption_start","NULL","RULE","#8"],["cumulative_supply_disruption","0","CONST",""],["prior_access_state","NULL","RULE","#9"],["payment_reference_id","custGen_9560405262_202554339_0","OLD","recharge_requests.customer_reference_id"],["closed_at","NULL","NULL",""],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["cl_state","ACTIVE","CASE",""],["created_at / updated_at","TBD","TBD",""]],
+  gates:[["id","(new UUID)","MINT",""],["connection_id","(same minted UUID)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP",""],["detection_source","MIGRATION","CONST",""],["recharge_reference_id","100905","RULE","#10: last CLAIMED recharge_tickets_id"],["window_start","2027-01-26T23:59:59+05:30 (= expiry − 30d) ⚠ confirm","RULE","#3+#14: tracker has only expiry_date → derived −30d"],["window_end","2027-02-25T23:59:59+05:30","RULE","#2+#14: isp_expiry_tracker.expiry_date"],["recharge_period_days","30","RULE","#11"],["confirmation_timestamp","NOW() at migration run","RULE","Q4: gate-creation instant in code"],["approaching_emitted","FALSE","RULE","#12: case 2 is the only FALSE"],["expired_emitted","FALSE","RULE","#13"],["created_at","TBD","TBD","Jaivin will confirm"],["updated_at","TBD","TBD",""]],
+  oblig:null, cand:null
+ }
+},
+{
+ id:3, title:"3 · PAUSED + candidate EXISTS", nas:"281474977397713",
+ rule:"No open ROUTER_PICKUP · expiry_date 2026-06-11 &lt; today · PENDING recharge ticket (591036) → CLOS PAUSED, TAS candidate ACTION_REQUIRED",
+ old:[
+  {t:"isp_expiry_tracker (row 48171)",rows:[["isp_expiry_tracker_id","48171"],["partner_id","281749854733695"],["nas_id","281474977397713"],["expiry_date","2026-06-11T23:59:59+05:30 (EXPIRED)"],["plan_status","ACTIVE"],["plan_id","2"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","TRUE"],["updated_at","2026-05-12T18:00:22+05:30"]]},
+  {t:"recharge_tickets (PENDING row 591036)",rows:[["recharge_tickets_id","591036"],["recharge_request_id","868872"],["partner_id","281749854733695"],["nas_id","281474977397713"],["start_date","2026-08-12T00:00:00+05:30"],["expiry_date","2026-09-10T23:59:59+05:30"],["partner_plan_id","6"],["incentive_eligible","TRUE"],["incentive_claimed","FALSE"],["customer_name","Sunny"],["customer_phone","7065128087"],["device_id","SY099824"],["wan_type","PPPoE"],["identifier","sunny_1449"],["transaction_id","ISP-281749854733695-a75f44d6...-20260609T115534Z"],["fixed_commission","294.0"],["status","PENDING"],["created_at","2026-06-09T17:25:34+05:30"]]},
+  {t:"recharge_tickets (last CLAIMED, row 481236)",rows:[["recharge_tickets_id","481236"],["status","CLAIMED"],["expiry_date","2026-06-12T23:59:59+05:30"],["updated_at","2026-05-12T18:00:22+05:30"]]},
+  {t:"recharge_requests (row 868872)",rows:[["recharge_request_id","868872"],["customer_reference_id","custGen_7065128087_203169299_0"],["partner_id","281749854733695"],["nas_id","281474977397713"],["customer_plan_start","2026-06-09T17:25:32+05:30"],["customer_plan_expiry","2026-09-01T17:25:32+05:30"],["requested_speed","100"],["request_status","PROCESSED"],["request_source","custGen"],["customer_account_id","281749855023992"],["customer_paid_amount","1500"],["created_at","2026-06-09T17:25:34+05:30"]]},
+  {t:"t_device (row 319813)",rows:[["device_id","SY099824"],["mac","98:9D:B2:B5:92:A0"],["nasid","281474977397713"],["lco_account_id","281749854733695"],["user_account_id","281749855023992"],["serial","SY2508GCC004324"],["type / product","ONT / HOME_ROUTER"],["status","INSTALLED"],["is_lost","FALSE"]]},
+  {t:"tasks (ROUTER_PICKUP)",absent:"No open pickup task (status 0/1) for this NAS"},
+  {t:"GetCustomerByAccount API (accountId=281749855023992) — live response",rows:[["name","Sunny"],["mobile","7065128087"],["deviceId","SY099824"],["nasid","281474977397713"],["lcoAccountId","281749854733695"],["planStartTime","2026-06-09T11:55:32Z"],["planExpiryTime","2026-09-01T11:30:00Z"],["wgStatus","OVERDUE"],["status","Active"],["wan_type / identifier","⚠ NOT present in API response (settings=null)"]]},
+  {t:"t_wg_customer — runbook support (service_address)",rows:[["account_id","281749855023992"],["mobile","7065128087"],["address (raw JSON)","{\"home\":\"H3 1048 H3 block jhangir puri\",\"street\":\"H3 1048 H3 block jhangir puri\",\"address\":\"\",\"pincode\":\"110033\",\"city\":\"Delhi\"}"]]},
+  {t:"t_router_user_mapping — runbook support (plan_id)",rows:[["mobile","7065128087"],["selected_plan_id","15752"],["last_recharge_ist","2026-08-04T17:00"],["last_expiry_ist","2026-09-01T17:00"]]}
+ ],
+ neu:{
+  connections:[["connection_id","(new UUID)","MINT",""],["customer_id","281749855023992","OLD","recharge_requests.customer_account_id = t_device.user_account_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854733695"],["zone_id","TBD","TBD",""],["service_address","\"H3 1048 H3 block jhangir puri, H3 1048 H3 block jhangir puri, 110033, Delhi\"::jsonb","LOOKUP","flatten(t_wg_customer.ADDRESS)"],["plan_id","15752","LOOKUP","runbook last_plan.selected_plan_id"],["current_state","PAUSED","CASE","case 3 definition"],["state_timestamp","TBD","TBD",""],["pause_reason","TBD","TBD","paused state — derivation pending"],["pause_count","TBD","TBD","default 0"],["p76_timer_start","TBD","TBD",""],["retry_count","0","CONST",""],["retry_exhausted","FALSE","CONST",""],["installation_complete_at","TBD","TBD",""],["activated_at","TBD","TBD",""],["deactivated_at","NULL","NULL",""],["total_active_duration / total_pause_duration","TBD","TBD",""],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["deactivation_reason","NULL","NULL",""],["prior_caeo_state","TBD","TBD",""],["latest_recharge_window_end","2026-06-11T23:59:59+05:30","OLD","isp_expiry_tracker.expiry_date"],["created_at / updated_at","TBD","TBD",""]],
+  cas:[["connection_id","(same minted UUID)","MINT",""],["customer_id","281749855023992","OLD",""],["caeo_state","CAEO_STATE_BLOCKED_BY_SUPPLY","RULE","#7: case 3 → BLOCKED_BY_SUPPLY"],["entitlement_end","2026-09-01T17:25:32+05:30","RULE","#1: recharge_requests.customer_plan_expiry"],["supply_disruption_start","2026-06-11T23:59:59+05:30","RULE","#8: ISP expiry end (tracker) for case 3"],["cumulative_supply_disruption","0","CONST",""],["prior_access_state","NULL","RULE","#9"],["payment_reference_id","custGen_7065128087_203169299_0","OLD","recharge_requests.customer_reference_id"],["closed_at","NULL","NULL",""],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["cl_state","PAUSED","CASE",""],["created_at / updated_at","TBD","TBD",""]],
+  gates:[["id","(new UUID)","MINT",""],["connection_id","(same minted UUID)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP",""],["detection_source","MIGRATION","CONST",""],["recharge_reference_id","481236","RULE","#10: last CLAIMED recharge_tickets_id"],["window_start","2026-05-12T23:59:59+05:30 (= expiry − 30d) ⚠ confirm","RULE","#3+#14"],["window_end","2026-06-11T23:59:59+05:30","RULE","#2+#14: isp_expiry_tracker.expiry_date"],["recharge_period_days","30","RULE","#11"],["confirmation_timestamp","NOW() at migration run","RULE","Q4"],["approaching_emitted","TRUE","RULE","#12"],["expired_emitted","TRUE","RULE","#13: TRUE for 3,4,5"],["created_at","TBD","TBD","Jaivin will confirm"],["updated_at","TBD","TBD",""]],
+  oblig:[["obligation_ref","(new ref)","MINT","must equal TAS authority_entity_id"],["connection_id","(same minted UUID)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP",""],["window_end","2026-06-11T23:59:59+05:30","RULE","#5+#14: ISP expiry ← isp_expiry_tracker.expiry_date"],["reason","REACTIVE","RULE","#15: PAUSED CLOS → REACTIVE"],["status","OPEN","CONST",""],["customer_entitlement_end","2026-09-01T17:25:32+05:30","RULE","#5: customer expiry ← recharge_requests.customer_plan_expiry"],["created_at","TBD","TBD",""],["updated_at","TBD","TBD",""],["resolved_at","NULL","NULL",""]],
+  cand:[["execution_candidate_id","(new UUID)","MINT",""],["state_version","0","CONST",""],["authority_entity_id","(= obligation_ref)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP",""],["connection_id","(same minted UUID)","MINT",""],["customer_id","281749855023992","OLD",""],["candidate_type","RECHARGE_OBLIGATION","CONST",""],["task_family","RECHARGE","CONST",""],["aggregation_type","BATCH","CONST",""],["state","ACTION_REQUIRED","CASE","case 3 definition"],["reason_code","TBD","TBD","not given — same as latest_attention_reason? confirm"],["reason_display_template","TBD","TBD","NOT NULL"],["deadline_at","TBD","TBD",""],["obligation_window_start","2026-05-12T23:59:59+05:30 (= expiry − 30d) ⚠ confirm","RULE","#6+#14"],["obligation_window_end","2026-06-11T23:59:59+05:30","RULE","#6+#14: isp_expiry_tracker.expiry_date"],["object_id","TBD","TBD","NOT NULL"],["locality","TBD","TBD","NOT NULL"],["batch_key","TBD","TBD","NOT NULL"],["incident_key","NULL","NULL",""],["is_csp_actionable","TRUE","CONST",""],["threshold_state","NORMAL","RULE","#16"],["latest_attention_at","NOW() at migration run","RULE","#17"],["latest_attention_version","1","CONST",""],["latest_attention_type","TBD","TBD","enum; NOT NULL"],["latest_attention_reason","SUPPLY_RECHARGE_NEEDED ⚠ not in code enum","RULE","#18 — enum only has _PROACTIVE/_REACTIVE variants; confirm"],["acked_attention_version","0","CONST",""],["commission_status","UNCLAIMED","OLD","incentive_claimed=FALSE"],["commission_claimed_at","NULL","OLD",""],["commission_disbursed_at","NULL","NULL",""],["resolved_at / cancelled_at / cancellation_context","NULL","NULL",""],["customer_name","Sunny","API","#20: GetCustomerByAccount(281749855023992).name — live-verified"],["connection_short_id","NULL","RULE","#19"],["wan_type","⚠ NOT in API response","API","#20 — no wanType key in response; confirm source"],["identifier","⚠ NOT in API response","API","#20 — no identifier key in response; confirm source"],["device_id","SY099824","API","#20: GetCustomerByAccount.deviceId — live-verified"],["customer_phone","7065128087","API","#20: GetCustomerByAccount.mobile — live-verified"],["speed_limit","100","OLD","recharge_requests.requested_speed"],["execution_id","NULL","RULE","#21"],["flow_type","NULL","RULE","#21"],["renewal_execution_status / sub_status","NULL","RULE","#21"],["created_at / updated_at","TBD","TBD",""]]
+ }
+},
+{
+ id:4, title:"4 · PAUSED + candidate DOES NOT EXIST", nas:"281474977394766",
+ rule:"No open ROUTER_PICKUP · expiry_date 2026-06-11 &lt; today · NO PENDING recharge ticket → CLOS PAUSED, no TAS candidate",
+ old:[
+  {t:"isp_expiry_tracker (row 38909)",rows:[["isp_expiry_tracker_id","38909"],["partner_id","281749854659753"],["nas_id","281474977394766"],["expiry_date","2026-06-11T23:59:59+05:30 (EXPIRED)"],["plan_status","ACTIVE"],["plan_id","1"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","TRUE"],["updated_at","2026-06-07T08:12:06+05:30"]]},
+  {t:"recharge_tickets (PENDING)",absent:"No PENDING row for this NAS"},
+  {t:"recharge_tickets (last CLAIMED, row 549555)",rows:[["recharge_tickets_id","549555"],["status","CLAIMED"],["expiry_date","2026-07-09T23:59:59+05:30"],["updated_at","2026-06-07T08:12:05+05:30"]]},
+  {t:"recharge_requests (latest, row 879878)",rows:[["recharge_request_id","879878"],["customer_reference_id","OUTAGE_PLAN1781075401111 ⚠ (outage compensation, not custGen)"],["partner_id","281749854659753"],["nas_id","281474977394766"],["customer_plan_start","2026-06-27T17:00:00+05:30 ⚠ future"],["customer_plan_expiry","2026-06-29T17:00:00+05:30"],["requested_speed","50"],["request_status","PROCESSED"],["request_source","ONLINE"],["customer_account_id","281749855021517"],["customer_paid_amount","0"],["created_at","2026-06-10T12:40:02+05:30"]]},
+  {t:"t_device (row 250797)",rows:[["device_id","SY080218"],["mac","98:9D:B2:6D:3D:F9"],["nasid","281474977394766"],["lco_account_id","281749854659753"],["user_account_id","281749855021517"],["serial","SY2501GCC004268"],["type / product","ONT / HOME_ROUTER"],["status","INSTALLED"],["is_lost","FALSE"]]},
+  {t:"tasks (ROUTER_PICKUP)",absent:"No open pickup task (status 0/1) for this NAS"},
+  {t:"t_wg_customer — runbook support (service_address)",rows:[["account_id","281749855021517"],["mobile","9205575793"],["address (raw JSON)","{\"home\":\"House no:320, chirag delhi, kumhar chauk\",\"street\":\"kumhar chauk\",\"address\":\"\",\"pincode\":\"110017\",\"city\":\"New Delhi\"}"]]},
+  {t:"t_router_user_mapping — runbook support (plan_id)",rows:[["mobile","9205575793"],["selected_plan_id","15785"],["last_recharge_ist","2026-06-27T17:00"],["last_expiry_ist","2026-06-29T17:00"]]}
+ ],
+ neu:{
+  connections:[["connection_id","(new UUID)","MINT",""],["customer_id","281749855021517","OLD","recharge_requests.customer_account_id = t_device.user_account_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854659753"],["zone_id","TBD","TBD",""],["service_address","\"House no:320, chirag delhi, kumhar chauk, kumhar chauk, 110017, New Delhi\"::jsonb","LOOKUP","flatten(t_wg_customer.ADDRESS)"],["plan_id","15785","LOOKUP","runbook last_plan.selected_plan_id"],["current_state","PAUSED","CASE","case 4 definition"],["state_timestamp","TBD","TBD",""],["pause_reason","TBD","TBD",""],["pause_count","TBD","TBD",""],["p76_timer_start","TBD","TBD",""],["retry_count","0","CONST",""],["retry_exhausted","FALSE","CONST",""],["installation_complete_at","TBD","TBD",""],["activated_at","TBD","TBD",""],["deactivated_at","NULL","NULL",""],["total_active_duration / total_pause_duration","TBD","TBD",""],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["deactivation_reason","NULL","NULL",""],["prior_caeo_state","TBD","TBD",""],["latest_recharge_window_end","2026-06-11T23:59:59+05:30","OLD","isp_expiry_tracker.expiry_date"],["created_at / updated_at","TBD","TBD",""]],
+  cas:[["connection_id","(same minted UUID)","MINT",""],["customer_id","281749855021517","OLD",""],["caeo_state","CAEO_STATE_BLOCKED","RULE","#7: case 4 → BLOCKED"],["entitlement_end","2026-06-29T17:00:00+05:30 ⚠ future (OUTAGE_PLAN comp)","RULE","#1: recharge_requests.customer_plan_expiry — future-dated despite BLOCKED; flag"],["supply_disruption_start","NULL","RULE","#8: NULL except case 3"],["cumulative_supply_disruption","0","CONST",""],["prior_access_state","NULL","RULE","#9"],["payment_reference_id","OUTAGE_PLAN1781075401111 ⚠","OLD","recharge_requests.customer_reference_id — not cust_… pattern; flag"],["closed_at","NULL","NULL",""],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["cl_state","PAUSED","CASE",""],["created_at / updated_at","TBD","TBD",""]],
+  gates:[["id","(new UUID)","MINT",""],["connection_id","(same minted UUID)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP",""],["detection_source","MIGRATION","CONST",""],["recharge_reference_id","549555","RULE","#10: last CLAIMED recharge_tickets_id"],["window_start","2026-05-12T23:59:59+05:30 (= expiry − 30d) ⚠ confirm","RULE","#3+#14"],["window_end","2026-06-11T23:59:59+05:30","RULE","#2+#14: isp_expiry_tracker.expiry_date"],["recharge_period_days","30","RULE","#11"],["confirmation_timestamp","NOW() at migration run","RULE","Q4"],["approaching_emitted","TRUE","RULE","#12"],["expired_emitted","TRUE","RULE","#13"],["created_at","TBD","TBD","Jaivin will confirm"],["updated_at","TBD","TBD",""]],
+  oblig:null, cand:null
+ }
+},
+{
+ id:5, title:"5 · PENDING_DEACTIVATION (no candidate)", nas:"281474977218548",
+ rule:"Open ROUTER_PICKUP exists (status 1, created 2026-06-07) · latest recharge_requests.customer_plan_start 2026-05-16 is NOT &gt; pickup creation → case 5. Note: tracker expiry 2026-08-31 is in the FUTURE — the pickup branch overrides the expiry test.",
+ old:[
+  {t:"isp_expiry_tracker (row 183342)",rows:[["isp_expiry_tracker_id","183342"],["partner_id","281749854641551"],["nas_id","281474977218548"],["expiry_date","2026-08-31T00:00:00+05:30 (future)"],["plan_status","ACTIVE"],["plan_id","2"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","TRUE"],["updated_at","2026-05-17T11:10:39+05:30"]]},
+  {t:"recharge_tickets (PENDING)",absent:"No PENDING row for this NAS"},
+  {t:"recharge_tickets (last CLAIMED, row 496574)",rows:[["recharge_tickets_id","496574"],["status","CLAIMED"],["expiry_date","2026-06-14T23:59:59+05:30"],["updated_at","2026-05-17T11:10:39+05:30"]]},
+  {t:"recharge_requests (latest, row 753991)",rows:[["recharge_request_id","753991"],["customer_reference_id","custGen_9891671980_201074960_1"],["partner_id","281749854641551"],["nas_id","281474977218548"],["customer_plan_start","2026-05-16T11:39:34+05:30 (≤ pickup created → case 5)"],["customer_plan_expiry","2026-05-23T11:39:34+05:30"],["requested_speed","100"],["request_status","PROCESSED"],["request_source","custGen"],["customer_account_id","281749854761328"],["customer_paid_amount","155"],["created_at","2026-05-16T11:39:34+05:30"]]},
+  {t:"t_device (row 228347)",rows:[["device_id","SY067775"],["mac","98:9D:B2:23:6C:E7"],["nasid","281474977218548"],["lco_account_id","281749854641551"],["user_account_id","281749854761328"],["serial","SY2410GCC000135"],["type / product","ONT / HOME_ROUTER"],["status","TO_BE_PICKED_UP"],["is_lost","FALSE"],["status_updated_at","2026-06-07T11:51:41+05:30"]]},
+  {t:"tasks (ROUTER_PICKUP, row 1780814020607791)",rows:[["id","1780814020607791"],["partner_id","281749854641551"],["type","ROUTER_PICKUP"],["status","1 (in progress)"],["created","2026-06-07T11:51:41+05:30"],["due_date","2026-06-28T11:51:41+05:30"],["mobile","9891671980"],["remarks","Disconnect / Discontinue service"],["extra_data.nas_id","281474977218548"],["extra_data.deviceId","SY067775"],["extra_data.customer_account_id","281749854761328"],["extra_data.address","B98, Ch Dham Singh Marg, Dayalpur, New Mustafabad, New Delhi, 110090"],["extra_data.last_bill_due","05/23/2026 06:09:34"],["extra_data.amount","565"]]},
+  {t:"t_wg_customer — runbook support (service_address)",rows:[["account_id","281749854761328"],["mobile","9891671980"],["address (raw JSON)","{\"home\":\"b 92\",\"street\":\"kaka ram vatika \",\"address\":\"B92, Dayalpur, New Mustafabad, New Delhi, ,  Delhi - 110094\",\"pincode\":\"110094\",\"city\":\" Delhi\"}"]]},
+  {t:"t_router_user_mapping — runbook support (plan_id)",rows:[["mobile","9891671980"],["selected_plan_id","15592"],["last_recharge_ist","2026-05-16T11:39"],["last_expiry_ist","2026-05-23T11:39"]]}
+ ],
+ neu:{
+  connections:[["connection_id","(new UUID)","MINT",""],["customer_id","281749854761328","OLD","recharge_requests.customer_account_id = t_device.user_account_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854641551"],["zone_id","TBD","TBD",""],["service_address","\"b 92, kaka ram vatika, B92, Dayalpur, New Mustafabad, New Delhi, ,  Delhi - 110094, 110094, Delhi\"::jsonb","LOOKUP","flatten(t_wg_customer.ADDRESS) — messy source 'address' key passes through verbatim"],["plan_id","15592","LOOKUP","runbook last_plan.selected_plan_id"],["current_state","PENDING_DEACTIVATION","CASE","case 5 definition"],["state_timestamp","TBD","TBD",""],["pause_reason","NULL","NULL",""],["pause_count","TBD","TBD",""],["p76_timer_start","TBD","TBD","candidate: tasks.created 2026-06-07T11:51:41"],["retry_count","0","CONST",""],["retry_exhausted","FALSE","CONST",""],["installation_complete_at","TBD","TBD",""],["activated_at","TBD","TBD",""],["deactivated_at","NULL","NULL",""],["total_active_duration / total_pause_duration","TBD","TBD",""],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["deactivation_reason","TBD","TBD","candidate: tasks.remarks = 'Disconnect / Discontinue service'"],["prior_caeo_state","TBD","TBD",""],["latest_recharge_window_end","2026-08-31T00:00:00+05:30","OLD","isp_expiry_tracker.expiry_date"],["created_at / updated_at","TBD","TBD",""]],
+  cas:[["connection_id","(same minted UUID)","MINT",""],["customer_id","281749854761328","OLD",""],["caeo_state","CAEO_STATE_BLOCKED","RULE","#7: case 5 → BLOCKED"],["entitlement_end","2026-05-23T11:39:34+05:30","RULE","#1: recharge_requests.customer_plan_expiry"],["supply_disruption_start","NULL","RULE","#8: NULL except case 3"],["cumulative_supply_disruption","0","CONST",""],["prior_access_state","NULL","RULE","#9"],["payment_reference_id","custGen_9891671980_201074960_1","OLD","recharge_requests.customer_reference_id"],["closed_at","NULL","NULL",""],["version","1","CONST",""],["correlation_id / causation_id","TBD","TBD",""],["cl_state","PENDING_DEACTIVATION","CASE",""],["created_at / updated_at","TBD","TBD",""]],
+  gates:[["id","(new UUID)","MINT",""],["connection_id","(same minted UUID)","MINT",""],["csp_id","⚠ no csp_account row yet","LOOKUP",""],["detection_source","MIGRATION","CONST",""],["recharge_reference_id","496574","RULE","#10: last CLAIMED recharge_tickets_id"],["window_start","2026-08-01T00:00:00+05:30 (= expiry − 30d) ⚠ confirm","RULE","#3+#14"],["window_end","2026-08-31T00:00:00+05:30","RULE","#2+#14: isp_expiry_tracker.expiry_date"],["recharge_period_days","30","RULE","#11"],["confirmation_timestamp","NOW() at migration run","RULE","Q4"],["approaching_emitted","TRUE","RULE","#12"],["expired_emitted","TRUE","RULE","#13 ⚠ note: this gate's window_end 2026-08-31 is in the future, yet expired_emitted=TRUE per rule — confirm intended for case 5"],["created_at","TBD","TBD","Jaivin will confirm"],["updated_at","TBD","TBD",""]],
+  oblig:null, cand:null
+ }
+}
+];
+
+const NEWMETA = {
+ connections:{label:"connections", svc:"CLOS · csp_connection_lifecycle_service"},
+ cas:{label:"customer_access_states", svc:"CAEOS · csp_customer_access_service"},
+ gates:{label:"recharge_gates", svc:"RV · csp_rv_service"},
+ oblig:{label:"supply_recharge_obligations", svc:"CAEOS · csp_customer_access_service"},
+ cand:{label:"recharge_execution_candidates", svc:"TAS · csp_tas_service"}
+};
+const ABSENT_WHY = {
+ oblig:"No row — obligations required only for cases 1 and 3 (Jaivin #15)",
+ cand:"No row — this case has no recharge execution candidate"
+};
+
+function esc(s){return String(s).replace(/&(?!amp;|lt;|gt;)/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+function oldCard(c){
+  if(c.absent) return `<div class="card absent"><h3>${c.t}</h3><div class="why">${c.absent}</div></div>`;
+  const rows=c.rows.map(r=>`<tr><td class="f">${esc(r[0])}</td><td class="v" colspan="2">${esc(r[1])}</td></tr>`).join("");
+  return `<div class="card"><h3>${c.t}</h3><table>${rows}</table></div>`;
+}
+function newCard(key,data){
+  const m=NEWMETA[key];
+  if(!data) return `<div class="card absent"><h3>${m.label} <span class="svc">— ${m.svc}</span></h3><div class="why">${ABSENT_WHY[key]||"No row in this case"}</div></div>`;
+  const rows=data.map(r=>`<tr class="t-${r[2]}"><td class="f">${esc(r[0])}</td><td class="v">${esc(r[1])}</td><td class="s"><span class="chip ${r[2]}">${r[2]}</span> ${esc(r[3]||"")}</td></tr>`).join("");
+  return `<div class="card"><h3>${m.label} <span class="svc">— ${m.svc}</span></h3><table>${rows}</table></div>`;
+}
+const tabsEl=document.getElementById("tabs"), panesEl=document.getElementById("panes");
+
+// ---- Approach tab (static) ----
+(function(){
+  const b=document.createElement("button");b.className="tab active";b.textContent="Approach & Process";
+  b.onclick=()=>{document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));document.querySelectorAll(".casepane").forEach(p=>p.classList.remove("active"));b.classList.add("active");document.getElementById("paneApproach").classList.add("active");};
+  tabsEl.appendChild(b);
+  const pane=document.createElement("div");pane.className="casepane active";pane.id="paneApproach";
+  pane.innerHTML=`
+  <div class="banner"><b>CSP Old → New Data Migration — Approach &amp; Thought Process</b>
+    <div class="rule" style="margin-top:10px;line-height:1.7">
+    <b style="color:#16243a">The 3-step process</b><br>
+    <b>Step 1 — Product defines the mapping (current phase).</b> Product comes up with the logic for all the workflows and entities in the CSP world. Against each table and column of the NEW system, we map where in the OLD system the data will come from. Wherever a derivation is required (no direct old column exists), that derivation logic is also defined by the PMs — never inferred by anyone else.<br><br>
+    <b>Step 2 — Analytics verification.</b> Once step 1 is complete for a workflow, the mapping is handed over to the analytics team to verify it — sources, derivations, populations and edge cases — against actual data.<br><br>
+    <b>Step 3 — Tech implementation.</b> Once verified, the mapping moves to the tech team for implementation of the actual migration.<br><br>
+    <b style="color:#16243a">How a workflow mapping is built (method used for ISP Recharge, repeatable for every workflow)</b><br>
+    1. <b>Scope the entities:</b> identify the primary tables holding the workflow's state in each new-system service (here: recharge_gates / RV, customer_access_states + supply_recharge_obligations / CAEOS, recharge_execution_candidates / TAS, connections / CLOS) and the relevant old-system tables (recharge_tickets, isp_expiry_tracker, recharge_requests, t_device, tasks).<br>
+    2. <b>Define the target-state cases:</b> Product enumerates the resting states migrated rows can land in (here: 5 cases over CLOS state × candidate existence) and the bifurcation rules that classify every old-world customer into exactly one case (pickup-task branch → expiry vs today → pending-ticket existence).<br>
+    3. <b>Pick one REAL production sample per case</b> (live prod replicas via Metabase) — the mapping is demonstrated on actual rows, not hypotheticals. Join key across old tables: NAS_ID.<br>
+    4. <b>Read the new schema from production code</b> (csp-os-yaml services/ Flyway migrations + entities) — every column of every target table is accounted for; nothing is mapped against specs.<br>
+    5. <b>Map column-by-column with provenance:</b> each new column is tagged OLD (direct old-source value), LOOKUP (mapping table / runbook rule), API (live service call), RULE (PM-defined derivation), CONST (constant/default), CASE (pinned by the case definition), MINT (new id), or TBD (pending PM decision). No value is ever invented — anything unresolved stays TBD until the PM supplies the logic.<br>
+    6. <b>Iterate:</b> PM reviews the view, supplies derivations for TBD columns and answers flags; the view is updated until no TBD/⚠ remains. Flags (enum mismatches, NOT NULL columns with no source, population gaps like customers with no claimed ticket) are surfaced explicitly, never silently resolved.<br><br>
+    <b style="color:#16243a">Reading this document</b><br>
+    Each case tab shows the OLD world (actual source rows) on the left and the NEW world (post-migration rows for all 5 target tables) on the right, with every column's value + provenance tag + source detail. Amber ⚠ items are open questions awaiting PM decision.
+    </div>
+  </div>`;
+  panesEl.appendChild(pane);
+})();
+
+CASES.forEach((cs,i)=>{
+  const b=document.createElement("button");b.className="tab";b.innerHTML="Case "+cs.title;b.onclick=()=>{document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));document.querySelectorAll(".casepane").forEach(p=>p.classList.remove("active"));b.classList.add("active");document.getElementById("pane"+cs.id).classList.add("active");};
+  tabsEl.appendChild(b);
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane"+cs.id;
+  pane.innerHTML=`
+    <div class="banner"><b>Case ${cs.title}</b> &nbsp;·&nbsp; NAS_ID <code>${cs.nas}</code><div class="rule">${cs.rule}</div></div>
+    ${cs.warn?`<div class="warn">${cs.warn}</div>`:""}
+    <div class="cols">
+      <div><div class="side-title">OLD WORLD (source rows, live prod replicas)</div>${cs.old.map(oldCard).join("")}</div>
+      <div><div class="side-title newW">NEW WORLD (post-migration rows)</div>${["connections","cas","gates","oblig","cand"].map(k=>newCard(k,cs.neu[k])).join("")}</div>
+    </div>`;
+  panesEl.appendChild(pane);
+});
+</script>
+</body>
+</html>
