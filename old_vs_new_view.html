@@ -360,7 +360,10 @@ const NEWMETA = {
  zones:{label:"zones", svc:"CCS · csp_capacity_coverage_service — zone definition + polygon"},
  zelig:{label:"csp_zone_eligibility", svc:"CCS · csp_capacity_coverage_service — which CSP is eligible for which zone"},
  zcaps:{label:"capacity_caps", svc:"CCS · csp_capacity_coverage_service — per-CSP-per-zone capacity"},
- zexp:{label:"csp_zone_exposures", svc:"DAS · csp_demand_allocation_service — runtime routing mirror"}
+ zexp:{label:"csp_zone_exposures", svc:"DAS · csp_demand_allocation_service — runtime routing mirror"},
+ complaints:{label:"complaints", svc:"SRS · csp_support_resolution_service — CENTRAL"},
+ ctasks:{label:"complaint_tasks", svc:"SRS · csp_support_resolution_service"},
+ restcand:{label:"restore_execution_candidates", svc:"TAS · csp_tas_service (async on ASSIGNED)"}
 };
 const ABSENT_WHY = {
  oblig:"No row — obligations required only for cases 1 and 3 (Jaivin #15)",
@@ -546,6 +549,136 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
   panesEl.appendChild(pane);
 })();
 
+// ---- Service Tickets pane (static — single case; connection × complaint, ASSIGNED) ----
+(function(){
+  const complaints=[
+   ["complaint_id","gen_random_uuid()","SYS","PK (SRS-generated)"],
+   ["connection_id","‹resolved›","DERIVED","resolved by SRS from CL by-customer lookup"],
+   ["zone_id","‹resolved›","DERIVED","from the resolved connection"],
+   ["customer_id","‹customer_account_id›","OLD","script input ← SERVICE_TICKET_MODEL.CUSTOMER_ACCOUNT_ID"],
+   ["csp_id","‹resolved CSP›","DERIVED","from the resolved connection"],
+   ["status","ASSIGNED","CONST","INTAKE→CLASSIFIED→ASSIGNED, synchronous in the POST"],
+   ["primary_class","SERVICE_ISSUE","DERIVED","classified from problem title"],
+   ["secondary_subtype","NO_INTERNET / SLOW_INTERNET / FREQUENT_DISCONNECTION / RECHARGE_DONE_NO_INTERNET / OPTICAL_POWER_OUT_OF_RANGE","DERIVED","from problem title (KaptureProblemMapper)"],
+   ["intake_channel","CALL_CENTER","CONST","Kapture intake"],
+   ["executor_type","CSP","DERIVED","SERVICE_ISSUE → CSP"],
+   ["executor_id","‹resolved CSP›","DERIVED","= csp_id"],
+   ["ticket_id","‹kapture_ticket_id›","OLD","script input ← SERVICE_TICKET_MODEL.KAPTURE_TICKET_ID (V11)"],
+   ["intake_timestamp","now()","SYS",""],
+   ["classification_timestamp","now()","SYS",""],
+   ["assigned_at","now()","SYS",""],
+   ["sla_at","computed (working-hrs)","DERIVED","classification + first-response SLA (V13)"],
+   ["within_tat","NULL","NULL","set at resolution (V13)"],
+   ["escalation_count / escalation_tier","0","SYS","default"],
+   ["submission_count","1","SYS","default"],
+   ["contact_attempt_count","0","SYS","default"],
+   ["signal_emitted","false","SYS","default"],
+   ["is_reopen / reopen_count","false / 0","SYS","default"],
+   ["lineage_id","NULL","NULL",""],
+   ["resolution_outcome / unresolvable_reason","NULL","NULL","resolution-phase"],
+   ["verification_method / customer_verification_outcome","NULL","NULL","verification-phase"],
+   ["complaint_resolution_minutes / verification_latency_minutes","NULL","NULL",""],
+   ["verification_started_at / resolved_at / closed_timestamp","NULL","NULL",""],
+   ["resolution_type","NULL","NULL","V9 device-swap"],
+   ["device_swap_old_device_id / new_device_id / initiated_at / completed_at","NULL","NULL","V9"],
+   ["version","1","SYS","@Version"],
+   ["correlation_id","mig-py-‹ts›-‹row›","CONST","X-Correlation-Id from script"],
+   ["causation_id","NULL","SYS",""],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const ctasks=[
+   ["task_id","gen_random_uuid()","SYS","PK"],
+   ["complaint_id","‹complaint_id›","DERIVED","FK to complaints"],
+   ["executor_type","CSP","DERIVED",""],
+   ["executor_id","‹resolved CSP›","DERIVED",""],
+   ["task_type","RESTORE","DERIVED","SERVICE_ISSUE → RESTORE"],
+   ["zone_id","‹resolved›","DERIVED","from complaint"],
+   ["status","OPEN","CONST",""],
+   ["response_sla_deadline","now + first_response_sla","DERIVED",""],
+   ["reassignment_count","0","SYS","default"],
+   ["first_response_at","NULL","NULL","V12; set when CSP first responds"],
+   ["diagnosis_outcome / diagnosis_fault_type","NULL","NULL","V9"],
+   ["version","1","SYS","@Version"],
+   ["correlation_id / causation_id","corr-id / NULL","CONST",""],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const restcand=[
+   ["execution_candidate_id","gen_random_uuid()","SYS","PK"],
+   ["state_version","0","SYS","default"],
+   ["authority_entity_id","‹complaint_id›","DERIVED","= complaint_id (from event)"],
+   ["csp_id","‹resolved CSP›","DERIVED","from event"],
+   ["candidate_type","RESTORE","CONST",""],
+   ["state","PENDING_ACCEPTANCE","CONST","initial restore state"],
+   ["task_family","RESTORE","CONST",""],
+   ["aggregation_type","INDIVIDUAL","CONST",""],
+   ["reason_code","‹restore reason›","DERIVED","from event"],
+   ["reason_display_template","‹template›","CONST",""],
+   ["deadline_at","= sla_at","DERIVED","from event (V1.6.2)"],
+   ["object_id","‹complaint/connection ref›","DERIVED","NOT NULL"],
+   ["locality","‹zone_id›","DERIVED","NOT NULL"],
+   ["batch_key / incident_key","NULL","NULL","INDIVIDUAL"],
+   ["is_csp_actionable","true","CONST",""],
+   ["threshold_state","NORMAL","CONST",""],
+   ["complaint_id","‹complaint_id›","DERIVED","from event"],
+   ["task_id","‹task_id›","DERIVED","from event"],
+   ["primary_class","SERVICE_ISSUE","DERIVED",""],
+   ["secondary_subtype","‹subtype›","DERIVED",""],
+   ["connection_id","‹connection_id›","DERIVED","from event"],
+   ["zone_id","‹zone_id›","DERIVED","from event"],
+   ["latest_attention_at","now()","SYS",""],
+   ["latest_attention_version","1","SYS",""],
+   ["latest_attention_type","STATE_CHANGE","CONST",""],
+   ["latest_attention_reason","‹reason›","DERIVED",""],
+   ["acked_attention_version","0","SYS","unviewed"],
+   ["escalation_note","NULL","NULL","V040"],
+   ["system_verification_result","NOT_RUN","CONST","V040"],
+   ["customer_verification_result","NOT_RUN","CONST","V040"],
+   ["diagnosis_device_id / diagnosis_fault_code","NULL","NULL","V040"],
+   ["assigned_technician_id","NULL","NULL","V040"],
+   ["ticket_id","‹kapture_ticket_id›","DERIVED","V049 (from event)"],
+   ["customer_account_id","‹customer_id›","DERIVED","V049 (NOT NULL default '')"],
+   ["customer_name","‹enrichment›","API","V049 GetCustomerByAccount"],
+   ["customer_mobile","‹enrichment›","API","V049"],
+   ["customer_address","‹enrichment›","API","V049"],
+   ["google_address_id","‹enrichment›","API","V049"],
+   ["device_id","‹enrichment›","API","V049"],
+   ["isp_identifier_type / isp_identifier_value","‹enrichment›","API","V049"],
+   ["enrichment_retry_count","0","SYS","V049"],
+   ["resolved_by_actor_id / resolved_by_actor_type","NULL","NULL","V067"],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane_svc";
+  pane.innerHTML=`
+   <div class="banner" style="border-left-color:#7c2d12"><b>Service Tickets — single case (connection × complaint, end state ASSIGNED)</b>
+     <div class="rule" style="margin-top:6px">Central entity = CLOS connections × SRS <code>complaints</code>. We create complaints only for the <b>ASSIGNED</b> end state. <b>A connection in ANY state can have a ticket created</b> — the only requirement is that the connection exists. Mechanism: the migration script POSTs <code>{customer_id, ticket_id, problem}</code> to <code>POST /srs/api/complaints</code> (Kapture minimal intake); SRS runs INTAKE→CLASSIFIED→ASSIGNED synchronously and resolves connection_id / zone_id / csp_id, then emits <code>COMPLAINT_TASK_CREATED</code> which creates the TAS restore candidate. So the right-side rows are written by the SRS flow, not direct INSERTs.</div>
+   </div>
+   <div class="hilite"><b>Ticket titles in scope (5)</b> — all classify to SERVICE_ISSUE → RESTORE → ASSIGNED: Internet Supply Down · Recharge done but internet not working · Frequent Disconnection · Slow Speed/Range Issues · Optical Power Out of Range. Plan-active (15-day) check from the runbook is <b>NOT used</b>.</div>
+   <div class="legend" style="padding:0 0 12px">
+     <span class="lbl">Tags:</span>
+     <span class="chip OLD">OLD — from old source (script input)</span>
+     <span class="chip DERIVED">DERIVED — SRS resolves/classifies at intake</span>
+     <span class="chip API">API — i2e1 customer enrichment</span>
+     <span class="chip CONST">CONST — flow constant</span>
+     <span class="chip SYS">SYS — system / default</span>
+   </div>
+   <div class="cols">
+     <div><div class="side-title">OLD WORLD (source)</div>
+       <div class="card"><h3>SERVICE_TICKET_MODEL (prod_db.public) — old Kapture tickets</h3>
+         <div class="cnote">Script CSV (3 fields) maps from here. Filter: <code>LAST_TITLE IN (5 titles)</code> AND <code>IS_RESOLVED = 0</code>. Plan-active T_ROUTER_USER_MAPPING check dropped per Jaivin. (Runbook also anti-joins DBT_CSP.DIM_CSP to skip already-migrated CSPs.)</div>
+         <table>
+           <tr><td class="f">CUSTOMER_ACCOUNT_ID</td><td class="v" colspan="2">→ POST customer_id</td></tr>
+           <tr><td class="f">KAPTURE_TICKET_ID</td><td class="v" colspan="2">→ POST ticket_id</td></tr>
+           <tr><td class="f">LAST_TITLE</td><td class="v" colspan="2">→ POST problem (one of the 5 titles)</td></tr>
+           <tr><td class="f">IS_RESOLVED</td><td class="v" colspan="2">filter = 0 (open)</td></tr>
+           <tr><td class="f">CURRENT_PARTNER_ACCOUNT_ID</td><td class="v" colspan="2">anti-join vs already-migrated CSPs</td></tr>
+         </table></div>
+       <div class="card inputcard"><h3>POST /srs/api/complaints <span class="ipill">the script</span></h3><div class="cnote">prod_migrate_srs.py → <code>{customer_id, ticket_id, problem}</code>. No idempotency — re-running dupes.</div></div>
+     </div>
+     <div><div class="side-title newW">NEW WORLD — 3 target tables (written by the SRS flow)</div>${newCard("complaints",complaints)}${newCard("ctasks",ctasks)}${newCard("restcand",restcand)}</div>
+   </div>`;
+  panesEl.appendChild(pane);
+})();
+
 // ---- Workflows (2-tier nav) ----
 const WF={
   isp:{label:"ISP Recharge", cases:CASES, rightKeys:["connections","cas","gates","oblig","cand","oblidx"], keyLabel:"NAS_ID", keyOf:cs=>cs.nas, oldTitle:"OLD WORLD (source rows, live prod replicas)"},
@@ -579,8 +712,8 @@ function showWorkflow(wfk){
   });
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
-const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones"};
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"]].forEach(([k,lbl])=>{
+const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc"};
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["svc","Service Tickets"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
   b.onclick=()=> STATICTAB[k]?showStatic(k,STATICTAB[k]):showWorkflow(k);
   tabsEl.appendChild(b);
