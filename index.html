@@ -359,6 +359,145 @@ const ABSENT_WHY = {
  nbrec:"No row — Nbrec candidate seeded only for case 5 (CUSTOMER_RECOVERY_PENDING); 'TAS Nbrec = Yes' on the matrix"
 };
 
+// ===== COMPENSATION DB =====
+const COMP_TABLES=[
+{id:"postures",title:"csp_compensation_postures",svc:"csp_compensation_service",
+ desc:"Step 2 · Governs whether a CSP is eligible to receive compensation payouts in each billing cycle. One row per CSP — must exist for the compensation engine to process any payout.",
+ warn:null,
+ old:[{t:"Old DB Source",absent:"No old DB table queried for this step. csp_id comes from the CSP Creation API. All other values are constants or runtime-computed. onboarding_date = migration run date (not historical partner onboarding date)."}],
+ neu:[
+  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
+  ["posture_state","COMP_STATE_FULL","CONST","fully eligible for payouts"],
+  ["posture_verification_status","VERIFIED","CONST","cleared — no re-verification required on migration"],
+  ["unverified_cycle_count","0","CONST","reset; VERIFIED status means no cycles tick"],
+  ["active_fpv_hold","false","CONST","migrated CSPs bypass First Payout Verification gate"],
+  ["active_restriction","false","CONST","no soft-penalty restriction at migration"],
+  ["active_suspension","false","CONST","no hard-penalty suspension at migration"],
+  ["onboarding_date","<current date at batch run>","RULE","set to migration run date, NOT historical partner onboarding date from old system"],
+  ["first_eligible_window_id","<next calendar month YYYY-MM>","RULE","excludes current partial cycle; derived as next month from run date"],
+  ["version","1","CONST","optimistic locking seed"],
+  ["created_at","NOW()","CONST",""],
+  ["updated_at","NOW()","CONST",""],
+  ["correlation_id","NULL","NULL","no originating event at migration time"],
+  ["causation_id","NULL","NULL","no originating event at migration time"]
+ ]
+}
+];
+
+// ===== PAYMENT DB =====
+const PAY_TABLES=[
+{id:"deposit",title:"deposit_ledger_entries",svc:"csp_payment_settlement_service",
+ desc:"Step 7 · Seeds each CSP's PSF deposit balance from the old system as an INITIAL_DEPOSIT ledger entry. Source: typeid:11 PSF accounts from T_ACCOUNT_BALANCE_SHEET1.",
+ warn:"Paise conversion: BALANCE from old DB is in rupees. amount / current_ledger_balance / credited_balance = BALANCE × 100. Full precision, no rounding. Partners with no PSF account (typeid:11) are skipped entirely.",
+ old:[{t:"T_ACCOUNT_BALANCE_SHEET1 (Snowflake · DB ID 113)",rows:[
+  ["account_id","partner_id (large integer)"],
+  ["BALANCE","closing PSF balance in rupees"],
+  ["Filter","typeid:11 PSF accounts only — matched via idparser(account_id) shard + localid join"],
+  ["Row selection","latest row per partner (MAX added_time)"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::TEXT","MINT","fresh UUID per row"],
+  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
+  ["entry_type","INITIAL_DEPOSIT","CONST","marks this as the opening migration entry"],
+  ["amount","BALANCE × 100 (paise)","OLD","T_ACCOUNT_BALANCE_SHEET1.BALANCE × 100"],
+  ["current_ledger_balance","BALANCE × 100 (paise)","OLD","same as amount — opening balance"],
+  ["credited_balance","BALANCE × 100 (paise)","OLD","same as amount — fully credited at open"],
+  ["claimed_balance","0","CONST","nothing claimed yet"],
+  ["cash_status","SETTLED","CONST",""],
+  ["netbox_id","NULL","NULL","not tied to a specific device"],
+  ["condition_ref","NULL","NULL","no condition clause"],
+  ["devices_issued","0","CONST","placeholder — updated by system post-migration"],
+  ["devices_returned","0","CONST","placeholder"],
+  ["devices_pending","0","CONST","placeholder"],
+  ["entry_sequence","1","CONST","first entry in this CSP's deposit ledger"],
+  ["created_at","NOW()","CONST",""]
+ ]
+},
+{id:"bank",title:"csp_bank_accounts",svc:"csp_payment_settlement_service",
+ desc:"Step 8 · Stores each CSP's Razorpay-linked bank account used for settlement withdrawals. One row per CSP.",
+ warn:"Partners with no RAZORPAY_ACCOUNT_MAPPING row → skipped entirely. Partners with a row but NULL CONTACT_ID → still inserted with razorpay_contact_id = NULL. Account numbers shorter than 4 chars → use all available digits.",
+ old:[
+  {t:"RAZORPAY_ACCOUNT_MAPPING (Snowflake)",rows:[
+   ["ACCOUNT_ID","= partner_id (join key)"],
+   ["ACCOUNT_NAME","account holder name"],
+   ["IFSC_CODE","bank IFSC code"],
+   ["ACCOUNT_NUMBER","full account number (not stored in new DB)"],
+   ["CONTACT_ID","Razorpay contact ID (nullable)"],
+   ["RAZORPAY_ACCOUNT_ID","Razorpay fund account ID (nullable)"],
+   ["MODIFIED_TIME","last modification"],
+   ["Row selection","latest active row per partner (FIVETRAN_DELETED=FALSE, ranked by ACTIVE desc + MODIFIED_TIME desc)"]
+  ]},
+  {t:"CSP_GATEWAY_SERVICE.CSP_ACCOUNT (Snowflake)",rows:[
+   ["PARTNER_ID","join key"],
+   ["CSP_ID","new system csp_id (Fivetran mirror of new CSP DB — cross-check only; Step 1 Excel tab is canonical)"],
+   ["Row selection","latest active row per PARTNER_ID"]
+  ]}
+ ],
+ neu:[
+  ["bank_account_id","gen_random_uuid()::TEXT","MINT","fresh UUID per row"],
+  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
+  ["account_holder_name","RAZORPAY_ACCOUNT_MAPPING.ACCOUNT_NAME","OLD","partner / business name"],
+  ["account_number_last_four","last 4 chars of ACCOUNT_NUMBER","OLD","full account number not stored; < 4 chars → use all"],
+  ["ifsc_code","RAZORPAY_ACCOUNT_MAPPING.IFSC_CODE","OLD",""],
+  ["bank_name","ifsc.razorpay.com/{IFSC} → BANK field","RULE","web-lookup per IFSC; cached per unique IFSC to avoid duplicate calls"],
+  ["branch_name","NULL","NULL","not available from source"],
+  ["account_type","SAVINGS","CONST",""],
+  ["verification_status","VERIFIED","CONST",""],
+  ["is_primary","true","CONST","only one bank account per CSP"],
+  ["verified_at","NOW()","CONST",""],
+  ["last_used_for_withdrawal_at","NULL","NULL","no withdrawal history at migration"],
+  ["version","1","CONST",""],
+  ["state","ACTIVE","CONST",""],
+  ["verified","true","CONST","legacy boolean flag alongside verification_status"],
+  ["razorpay_contact_id","RAZORPAY_ACCOUNT_MAPPING.CONTACT_ID","OLD","nullable — NULL if absent in old DB"],
+  ["razorpay_fund_account_id","RAZORPAY_ACCOUNT_MAPPING.RAZORPAY_ACCOUNT_ID","OLD","nullable — NULL if absent in old DB"],
+  ["created_at","NOW()","CONST",""],
+  ["updated_at","NOW()","CONST",""]
+ ]
+},
+{id:"wallets",title:"wallets",svc:"csp_payment_settlement_service",
+ desc:"Step 22 · Seeds each CSP's opening wallet balance migrated from the old partner app's closing balance. One row per CSP.",
+ warn:"Paise conversion: balance from old DB is in rupees. wallet_balance = balance × 100. Edge case: partners not found in Snowflake → insert anyway with wallet_balance = 0 (do not skip).",
+ old:[{t:"T_ACCOUNT_BALANCE_SHEET1 (Snowflake · DB ID 113)",rows:[
+  ["account_id","= partner_id (join key)"],
+  ["balance","closing wallet balance in rupees"],
+  ["old_balance","previous balance (for traceability only)"],
+  ["action","last transaction action"],
+  ["transaction_id","last transaction ID"],
+  ["Row selection","latest row per partner (ROW_NUMBER by added_time desc + id desc)"]
+ ]}],
+ neu:[
+  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
+  ["state","ACTIVE","CONST",""],
+  ["wallet_balance","balance × 100 (paise)","OLD","T_ACCOUNT_BALANCE_SHEET1.balance × 100; 0 if partner not found"],
+  ["reserved_for_settlement","0","CONST","nothing pending withdrawal at migration"],
+  ["version","1","CONST",""],
+  ["settlement_bind_bank_account_id","NULL","NULL","bank binding happens post-migration"],
+  ["created_at","NOW()","CONST",""],
+  ["updated_at","NOW()","CONST",""],
+  ["state_changed_at","NOW()","CONST",""]
+ ]
+},
+{id:"wallet_ledger",title:"wallet_ledger_entries",svc:"csp_payment_settlement_service",
+ desc:"Step 23 · Seeds an opening SETTLEMENT_CREDIT ledger entry per CSP. Reuses Q1 output from Step 22 — no new Snowflake query needed. Runs in the same batch as Step 22.",
+ warn:"Paise conversion: amount and balance_after = balance × 100. Partners with balance = 0 still get a ledger row with amount = 0 and balance_after = 0.",
+ old:[{t:"T_ACCOUNT_BALANCE_SHEET1 (Snowflake · DB ID 113)",rows:[
+  ["Source","Same Q1 output reused from Step 22 — no new query"],
+  ["balance","closing wallet balance in rupees → amount & balance_after in paise"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::TEXT","MINT","fresh UUID per row"],
+  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
+  ["entry_type","SETTLEMENT_CREDIT","CONST","opening migration credit entry"],
+  ["amount","balance × 100 (paise)","OLD","T_ACCOUNT_BALANCE_SHEET1.balance × 100"],
+  ["balance_after","balance × 100 (paise)","OLD","equals amount — this is the first entry, so balance after = amount credited"],
+  ["entry_sequence","1","CONST","first entry in this CSP's wallet ledger"],
+  ["line_item_description","Migration opening balance","CONST","human-readable label on wallet ledger screen"],
+  ["created_at","NOW()","CONST",""]
+ ]
+}
+];
+
 function esc(s){return String(s).replace(/&(?!amp;|lt;|gt;)/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
 function oldCard(c){
   const ic=c.input?" inputcard":"";
@@ -464,6 +603,40 @@ function buildCasePane(wfk,wf,cs){
 }
 Object.entries(WF).forEach(([wfk,wf])=>wf.cases.forEach(cs=>buildCasePane(wfk,wf,cs)));
 
+// ---- Compensation & Payment DB schema panes ----
+function newSchemaCard(label,svc,rows){
+  const r=rows.map(r=>`<tr class="t-${r[2]}"><td class="f">${esc(r[0])}</td><td class="v">${esc(r[1])}</td><td class="s"><span class="chip ${r[2]}">${r[2]}</span> ${esc(r[3]||"")}</td></tr>`).join("");
+  return `<div class="card"><h3>${label} <span class="svc">— ${svc}</span></h3><table>${r}</table></div>`;
+}
+function buildDBPane(dbKey,tbl){
+  const pane=document.createElement("div");pane.className="casepane";pane.id=`pane_${dbKey}_${tbl.id}`;
+  const oldCards=tbl.old.map(oldCard).join("");
+  const neuCard=newSchemaCard(tbl.title,tbl.svc,tbl.neu);
+  const warnHtml=tbl.warn?`<div class="warn">⚠ ${esc(tbl.warn)}</div>`:"";
+  pane.innerHTML=`
+    <div class="banner"><b>${tbl.title}</b> <span style="font-size:12px;color:#667;font-weight:400">— ${tbl.svc}</span><div class="rule">${tbl.desc}</div></div>
+    ${warnHtml}
+    <div class="cols">
+      <div><div class="side-title">OLD WORLD — source tables</div>${oldCards}</div>
+      <div><div class="side-title newW">NEW TABLE — post-migration schema</div>${neuCard}</div>
+    </div>`;
+  panesEl.appendChild(pane);
+}
+COMP_TABLES.forEach(t=>buildDBPane("comp",t));
+PAY_TABLES.forEach(t=>buildDBPane("pay",t));
+
+function showDBWorkflow(dbKey,tables,label){
+  setTop(dbKey);
+  subTabsEl.style.display="flex";
+  subTabsEl.innerHTML=`<span class="wflabel">${label.toUpperCase()} — pick a table:</span>`;
+  tables.forEach((tbl,i)=>{
+    const b=document.createElement("button");b.className="subtab"+(i===0?" active":"");b.textContent=tbl.title;
+    b.onclick=()=>{document.querySelectorAll(".subtab").forEach(s=>s.classList.remove("active"));b.classList.add("active");showPane(`pane_${dbKey}_${tbl.id}`);};
+    subTabsEl.appendChild(b);
+  });
+  showPane(`pane_${dbKey}_${tables[0].id}`);
+}
+
 function showPane(id){document.querySelectorAll(".casepane").forEach(p=>p.classList.remove("active"));const el=document.getElementById(id);if(el)el.classList.add("active");}
 function setTop(k){document.querySelectorAll(".toptab").forEach(t=>t.classList.toggle("active",t.dataset.k===k));}
 function showStatic(k,paneId){setTop(k);subTabsEl.style.display="none";showPane(paneId);}
@@ -478,9 +651,9 @@ function showWorkflow(wfk){
   });
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"]].forEach(([k,lbl])=>{
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["comp","Compensation DB"],["pay","Payment DB"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
-  b.onclick=()=> k==="approach"?showApproach():k==="sequencing"?showStatic("sequencing","pane_sequencing"):showWorkflow(k);
+  b.onclick=()=> k==="approach"?showApproach():k==="sequencing"?showStatic("sequencing","pane_sequencing"):k==="comp"?showDBWorkflow("comp",COMP_TABLES,"Compensation DB"):k==="pay"?showDBWorkflow("pay",PAY_TABLES,"Payment DB"):showWorkflow(k);
   tabsEl.appendChild(b);
 });
 showApproach();
