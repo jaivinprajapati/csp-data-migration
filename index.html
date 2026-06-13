@@ -48,6 +48,13 @@
   .banner{background:#fff;border-left:5px solid #16243a;border-radius:6px;padding:12px 16px;margin:4px 0 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
   .banner b{font-size:14px}
   .banner .rule{color:#444;margin-top:4px;font-size:12.5px}
+  .ovw{background:#eef3f9;border:1px solid #d6e0ec;border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:12px;color:#33415c;line-height:1.55}
+  .ovw b{color:#16243a}
+  .banner .means{margin-top:6px;font-size:12.5px;color:#1c1e21}
+  .banner .means b{color:#5b2d91}
+  .banner .cond{margin-top:3px;font-size:12px;color:#444}
+  .banner .cond b{color:#0e6e6e}
+  .banner .cond code{background:#eef2f7;padding:0 4px;border-radius:3px;font-size:11.5px}
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
   @media(max-width:1100px){.cols{grid-template-columns:1fr}}
   .side-title{font-size:14px;font-weight:800;letter-spacing:.06em;margin:6px 0 10px;color:#16243a}
@@ -128,6 +135,7 @@
 const CASES = [
 {
  id:1, title:"1 · ACTIVE + candidate EXISTS", nas:"281474977397447",
+ means:"Live plan; a recharge is due — CSP must act.", cond:"No open pickup · ISP window &gt; today · a PENDING recharge ticket exists.",
  rule:"No open ROUTER_PICKUP · isp_expiry_tracker.expiry_date 2027-01-15 &gt; today · recharge_tickets has STATUS=PENDING row (335103) → CLOS ACTIVE, TAS candidate ACTION_REQUIRED",
  warn:"⚠ This customer has NO CLAIMED ticket ever (only the PENDING one) → recharge_gates.recharge_reference_id (= last claimed ticket id) has no value, but the column is NOT NULL and part of UNIQUE(connection_id, recharge_reference_id). Rule needed for zero-claimed-ticket customers.",
  old:[
@@ -152,6 +160,7 @@ const CASES = [
 },
 {
  id:2, title:"2 · ACTIVE + candidate DOES NOT EXIST", nas:"281474977310435",
+ means:"Live plan; nothing pending.", cond:"No open pickup · ISP window &gt; today · no PENDING ticket.",
  rule:"No open ROUTER_PICKUP · expiry_date 2027-02-25 &gt; today · NO PENDING recharge ticket → CLOS ACTIVE, no TAS candidate",
  old:[
   {t:"isp_expiry_tracker (row 62234)",rows:[["isp_expiry_tracker_id","62234"],["partner_id","281749854635402"],["nas_id","281474977310435"],["expiry_date","2027-02-25T23:59:59+05:30"],["plan_status","ACTIVE"],["plan_id","1"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","FALSE"],["updated_at","2026-02-08T08:32:58+05:30"]]},
@@ -172,6 +181,7 @@ const CASES = [
 },
 {
  id:3, title:"3 · PAUSED + candidate EXISTS", nas:"281474977397713",
+ means:"Plan expired; a recharge is due.", cond:"No open pickup · ISP window &lt; today · a PENDING recharge ticket exists.",
  rule:"No open ROUTER_PICKUP · expiry_date 2026-06-11 &lt; today · PENDING recharge ticket (591036) → CLOS PAUSED, TAS candidate ACTION_REQUIRED",
  old:[
   {t:"isp_expiry_tracker (row 48171)",rows:[["isp_expiry_tracker_id","48171"],["partner_id","281749854733695"],["nas_id","281474977397713"],["expiry_date","2026-06-11T23:59:59+05:30 (EXPIRED)"],["plan_status","ACTIVE"],["plan_id","2"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","TRUE"],["updated_at","2026-05-12T18:00:22+05:30"]]},
@@ -195,6 +205,7 @@ const CASES = [
 },
 {
  id:4, title:"4 · PAUSED + candidate DOES NOT EXIST", nas:"281474977394766",
+ means:"Plan expired; nothing pending.", cond:"No open pickup · ISP window &lt; today · no PENDING ticket.",
  rule:"No open ROUTER_PICKUP · expiry_date 2026-06-11 &lt; today · NO PENDING recharge ticket → CLOS PAUSED, no TAS candidate",
  old:[
   {t:"isp_expiry_tracker (row 38909)",rows:[["isp_expiry_tracker_id","38909"],["partner_id","281749854659753"],["nas_id","281474977394766"],["expiry_date","2026-06-11T23:59:59+05:30 (EXPIRED)"],["plan_status","ACTIVE"],["plan_id","1"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","TRUE"],["updated_at","2026-06-07T08:12:06+05:30"]]},
@@ -215,6 +226,7 @@ const CASES = [
 },
 {
  id:5, title:"5 · PENDING_DEACTIVATION (no candidate)", nas:"281474977218548",
+ means:"Customer being disconnected; pickup raised.", cond:"An open ROUTER_PICKUP task (status 0/1) exists.",
  rule:"Open ROUTER_PICKUP exists (status 1, created 2026-06-07) · latest recharge_requests.customer_plan_start 2026-05-16 is NOT &gt; pickup creation → case 5. Note: tracker expiry 2026-08-31 is in the FUTURE — the pickup branch overrides the expiry test.",
  hi:"<b>SEEDING APPROACH (connections):</b> We do NOT seed the connection directly into PENDING_DEACTIVATION. We seed it in its <b>prior state</b> (ACTIVE/PAUSED) and then <b>create the pickup task from scratch</b> via the Nbrec creation API — that flow is what transitions the connection to PENDING_DEACTIVATION and creates the downstream tickets. So migration seeds the previous state; this resting state is reached <b>after</b> ticket creation. (Same mechanism as Netbox case 5.)",
  old:[
@@ -248,6 +260,7 @@ function cust(o){return [["device_id",o.dev,"OLD","t_device.device_id (PK)"],["c
 const NETBOX_CASES=[
 {
  id:1,title:"1 · DEPLOYED × PAUSED",dev:"100015",
+ means:"Device at the customer; plan expired.", cond:"Device↔partner mapping exists · connection window &lt; now.",
  rule:"t_device partner↔device mapping exists; device at customer (INSTALLED, user_account_id present). ISP window &lt; now() → upstream connection PAUSED (ACS reads the already-seeded connections.latest_recharge_window_end &lt; now()).",
  old:[
   tdev([["device_id","100015"],["mac","30:DE:4B:3F:EB:66"],["nasid","301433"],["lco_account_id (partner)","274877937217"],["user_account_id (customer)","274877960826"],["serial","222B191013570"],["status","INSTALLED"],["unit_price","250"],["added_time","2023-02-06"]]),
@@ -257,6 +270,7 @@ const NETBOX_CASES=[
 },
 {
  id:2,title:"2 · DEPLOYED × ACTIVE",dev:"100007",
+ means:"Device at the customer; plan live.", cond:"Device↔partner mapping exists · connection window &gt; now.",
  rule:"Same as case 1 but ISP window &gt; now() → upstream connection ACTIVE (connections.latest_recharge_window_end &gt; now()).",
  old:[
   tdev([["device_id","100007"],["mac","30:DE:4B:40:42:8A"],["nasid","338912"],["lco_account_id (partner)","274877943039"],["user_account_id (customer)","274877983465"],["status","INSTALLED"],["unit_price","250"],["status_updated_at","2026-04-18"]]),
@@ -266,6 +280,7 @@ const NETBOX_CASES=[
 },
 {
  id:3,title:"3 · CUSTODIED × (no connection)",dev:"100071",
+ means:"Device with CSP, never deployed (fresh stock).", cond:"No customer now · user_account_id NEVER in t_device_audit.",
  rule:"t_device mapping exists; user_account_id NULL now AND NEVER existed in public.t_device_audit → device never deployed → CUSTODIED, no connection.",
  old:[
   tdev([["device_id","100071"],["mac","30:DE:4B:3F:CD:9F"],["nasid","351442"],["lco_account_id (partner)","274877936126"],["user_account_id (customer)","NULL"],["serial","222B191010689"],["status","IDLE"],["added_time","2023-11-05"]]),
@@ -276,6 +291,7 @@ const NETBOX_CASES=[
 },
 {
  id:4,title:"4 · IDLE × (no connection)",dev:"100020",
+ means:"Device back with CSP after being deployed.", cond:"No customer now · user_account_id EVER in t_device_audit.",
  rule:"t_device mapping exists; user_account_id NULL now BUT EVER existed in public.t_device_audit → device was deployed before, now back with CSP → IDLE, no connection.",
  old:[
   tdev([["device_id","100020"],["mac","30:DE:4B:3F:D6:2D"],["nasid","NULL"],["lco_account_id (partner)","281749854637042"],["user_account_id (customer)","NULL"],["serial","222B191014453"],["status","IDLE"],["status_updated_at","2026-04-05"]]),
@@ -286,6 +302,7 @@ const NETBOX_CASES=[
 },
 {
  id:5,title:"5 · CUSTOMER_RECOVERY_PENDING × PENDING_DEACTIVATION",dev:"100906",
+ means:"Device at customer; recovery (pickup) underway.", cond:"An open ROUTER_PICKUP for the customer exists.",
  rule:"t_device mapping exists; connection for user_account_id is PENDING_DEACTIVATION (open ROUTER_PICKUP). Device at customer, recovery in flight. THE ONLY case with a TAS nbrec candidate.",
  hi:"<b>SEEDING APPROACH:</b> We seed this as a <b>DEPLOYED device + PAUSED connection</b> (the previous state). We then <b>create the pickup task from scratch</b> via the Nbrec creation API — that flow is what moves custody → CUSTOMER_RECOVERY_PENDING, the connection → PENDING_DEACTIVATION, and <b>creates the nbrec candidate (ticket) shown below</b>. So migration seeds the prior state; this resting state + the candidate are produced <b>after</b> ticket creation (NOT directly INSERTed).",
  old:[
@@ -299,6 +316,7 @@ const NETBOX_CASES=[
 },
 {
  id:6,title:"6 · LOST × PENDING_DEACTIVATION",dev:"100026",
+ means:"Device lost.", cond:"t_device.status = LOST.",
  rule:"t_device mapping exists AND t_device.status = LOST → custody LOST. (Matrix associates LOST with the PENDING_DEACTIVATION connection row; determinant is purely t_device.status=LOST.)",
  old:[
   tdev([["device_id","100026"],["mac","30:DE:4B:3F:E9:86"],["nasid","301364"],["lco_account_id (partner)","274877947660"],["user_account_id (customer)","274877949516"],["serial","222B191014124"],["status","LOST"],["status_updated_at","2026-01-19"]]),
@@ -308,6 +326,7 @@ const NETBOX_CASES=[
 },
 {
  id:7,title:"7 · WRITTEN_OFF × PAUSED",dev:"100267",
+ means:"Written-off device; customer plan expired.", cond:"In written_off_devices (reversed=0, same CSP) · connection window &lt; now.",
  rule:"device_id in public.written_off_devices (reversed=0) AND written_off_devices.partner_id = t_device.lco_account_id (SAME CSP) → WRITTEN_OFF. Connection input = PAUSED (ISP window &lt; now()).",
  old:[
   tdev([["device_id","100267"],["mac","AC:15:A2:D1:43:A1"],["nasid","393565"],["lco_account_id (partner)","274877943039"],["user_account_id (customer)","274878007923"],["serial","222A2J5003227"],["status","INSTALLED"]]),
@@ -318,6 +337,7 @@ const NETBOX_CASES=[
 },
 {
  id:8,title:"8 · WRITTEN_OFF × PENDING_DEACTIVATION",dev:"152307",
+ means:"Written-off device; recovery underway.", cond:"In written_off_devices (reversed=0, same CSP) · open pickup.",
  rule:"device_id in written_off_devices (reversed=0) AND partner_id = t_device.lco_account_id (SAME CSP) → WRITTEN_OFF. Connection input = PENDING_DEACTIVATION (open ROUTER_PICKUP).",
  old:[
   tdev([["device_id","152307"],["mac","3C:52:A1:97:57:01"],["nasid","19999"],["lco_account_id (partner)","281749854619632"],["user_account_id (customer)","281749854634013"],["serial","2238042025228"],["status","INSTALLED"]]),
@@ -329,6 +349,7 @@ const NETBOX_CASES=[
 },
 {
  id:10,title:"10 · WRITTEN_OFF × (no connection)",dev:"100043",
+ means:"Written-off device; no customer.", cond:"In written_off_devices (reversed=0, same CSP) · no user_account_id.",
  rule:"device_id in written_off_devices (reversed=0) AND partner_id = t_device.lco_account_id (SAME CSP) → WRITTEN_OFF. user_account_id NULL → no connection. (Case 9 ACTIVE×WRITTEN_OFF removed — an active connection never goes to written-off.)",
  old:[
   tdev([["device_id","100043"],["mac","30:DE:4B:3F:ED:FA"],["nasid","NULL"],["lco_account_id (partner)","281749854645918"],["user_account_id (customer)","NULL"],["serial","222B191013447"],["status","IDLE"]]),
@@ -339,6 +360,7 @@ const NETBOX_CASES=[
 },
 {
  id:11,title:"11 · PENDING_CSP_RECEIPT × (no connection)",dev:"100715",
+ means:"Device dispatched; CSP not yet received it.", cond:"t_device.status = DISPATCHED / IN_TRANSIT.",
  rule:"t_device mapping exists AND t_device.status = DISPATCHED / IN_TRANSIT → device dispatched, CSP not yet confirmed receipt → PENDING_CSP_RECEIPT, no connection.",
  old:[
   tdev([["device_id","100715"],["mac","B4:B0:24:EB:A6:A8"],["nasid","NULL"],["lco_account_id (partner)","274877909095"],["user_account_id (customer)","NULL"],["serial","221C427004336"],["status","IN_TRANSIT"],["status_updated_at","2026-06-09"]]),
@@ -679,14 +701,20 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
 })();
 
 // ---- Workflows (2-tier nav) ----
+const ISP_OVW=`<b>How the 5 cases are built.</b> Central entities: CLOS <b>connection state</b> × whether a TAS <b>recharge candidate</b> exists. Connection = ACTIVE / PAUSED / PENDING_DEACTIVATION; a candidate exists only when a recharge is pending. Every migrated connection lands in exactly one case (MECE).`;
+const NB_OVW=`<b>How the 10 cases are built.</b> Central entities: ACS <b>netbox_custody state</b> × CLOS <b>connection state</b> (connection is an input, seeded upstream). Custody is read from t_device (status + partner/customer mapping), the write-off ledger, and device history. Every CSP-mapped device lands in exactly one case (MECE). ACTIVE × WRITTEN_OFF is dropped — an active connection never goes to written-off.`;
 const WF={
-  isp:{label:"ISP Recharge", cases:CASES, rightKeys:["connections","cas","gates","oblig","cand","oblidx"], keyLabel:"NAS_ID", keyOf:cs=>cs.nas, oldTitle:"OLD WORLD (source rows, live prod replicas)"},
-  netbox:{label:"Netbox / Devices", cases:NETBOX_CASES, rightKeys:["custody","nbrec"], keyLabel:"DEVICE_ID", keyOf:cs=>cs.dev, oldTitle:"OLD WORLD — input rows (live prod replicas)"}
+  isp:{label:"ISP Recharge", cases:CASES, rightKeys:["connections","cas","gates","oblig","cand","oblidx"], keyLabel:"NAS_ID", keyOf:cs=>cs.nas, oldTitle:"OLD WORLD (source rows, live prod replicas)", overview:ISP_OVW},
+  netbox:{label:"Netbox / Devices", cases:NETBOX_CASES, rightKeys:["custody","nbrec"], keyLabel:"DEVICE_ID", keyOf:cs=>cs.dev, oldTitle:"OLD WORLD — input rows (live prod replicas)", overview:NB_OVW}
 };
 function buildCasePane(wfk,wf,cs){
   const pane=document.createElement("div");pane.className="casepane";pane.id=`pane_${wfk}_${cs.id}`;
   pane.innerHTML=`
-    <div class="banner"><b>Case ${cs.title}</b> &nbsp;·&nbsp; ${wf.keyLabel} <code>${wf.keyOf(cs)}</code><div class="rule">${cs.rule}</div></div>
+    ${wf.overview?`<div class="ovw">${wf.overview}</div>`:""}
+    <div class="banner"><b>Case ${cs.title}</b> &nbsp;·&nbsp; ${wf.keyLabel} <code>${wf.keyOf(cs)}</code>
+      ${cs.means?`<div class="means"><b>Means:</b> ${cs.means}</div>`:""}
+      ${cs.cond?`<div class="cond"><b>Condition:</b> ${cs.cond}</div>`:""}
+      ${(!cs.means&&cs.rule)?`<div class="rule">${cs.rule}</div>`:""}</div>
     ${cs.hi?`<div class="hilite">${cs.hi}</div>`:""}
     ${cs.warn?`<div class="warn">${cs.warn}</div>`:""}
     <div class="cols">
