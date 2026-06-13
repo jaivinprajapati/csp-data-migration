@@ -999,8 +999,16 @@ function showWorkflow(wfk){
   });
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
-const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc"};
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["svc","Service Tickets"],["comp","Compensation DB"],["pay","Payment DB"]].forEach(([k,lbl])=>{
+// ---- Installation tab: live-embed of the Installation migration plan ----
+(function(){
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane_install";
+  pane.innerHTML=`
+   <div style="padding:10px 0;font-size:12px;color:#667">Live view of the <b>Installation</b> migration plan — source: <a href="https://ashish-raj-wiom.github.io/csp-installation-migration/" target="_blank" style="color:#1259a6">ashish-raj-wiom.github.io/csp-installation-migration</a>. This tab updates automatically whenever that doc changes. <a href="https://ashish-raj-wiom.github.io/csp-installation-migration/" target="_blank" style="color:#1259a6">Open full screen ↗</a></div>
+   <iframe src="https://ashish-raj-wiom.github.io/csp-installation-migration/" title="Installation Migration" style="width:100%;height:calc(100vh - 210px);min-height:600px;border:1px solid #d2dae4;border-radius:8px;background:#fff"></iframe>`;
+  panesEl.appendChild(pane);
+})();
+const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc",install:"pane_install"};
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["install","Installation"],["zones","Zones"],["svc","Service Tickets"],["comp","Compensation DB"],["pay","Payment DB"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
   b.onclick=()=> STATICTAB[k]?showStatic(k,STATICTAB[k]):k==="comp"?showDBWorkflow("comp",COMP_TABLES,"Compensation DB"):k==="pay"?showDBWorkflow("pay",PAY_TABLES,"Payment DB"):showWorkflow(k);
   tabsEl.appendChild(b);
