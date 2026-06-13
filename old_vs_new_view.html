@@ -22,6 +22,16 @@
   .tabs{display:flex;gap:6px;padding:12px 24px 0;background:#16243a;flex-wrap:wrap}
   .tab{padding:9px 16px;border-radius:8px 8px 0 0;background:#22344f;color:#cfdcef;cursor:pointer;font-weight:600;font-size:12.5px;border:none}
   .tab.active{background:#f4f5f7;color:#16243a}
+  .toptab{padding:11px 24px;border-radius:9px 9px 0 0;background:#22344f;color:#cfdcef;cursor:pointer;font-weight:700;font-size:14px;border:none;letter-spacing:.02em}
+  .toptab.active{background:#f4f5f7;color:#16243a}
+  #subtabs{display:none;gap:6px;padding:11px 24px;background:#e3e8ef;flex-wrap:wrap;align-items:center;border-bottom:1px solid #d2dae4}
+  #subtabs .wflabel{font-size:11px;font-weight:800;letter-spacing:.08em;color:#5b6b82;margin-right:6px}
+  .subtab{padding:7px 13px;border-radius:7px;background:#fff;color:#33415c;cursor:pointer;font-weight:600;font-size:12px;border:1px solid #cbd5e2}
+  .subtab.active{background:#16243a;color:#fff;border-color:#16243a}
+  .inputcard{border:1.5px solid #1259a6}
+  .inputcard h3{background:#e9f1fb;color:#1259a6}
+  .ipill{float:right;font-size:9.5px;background:#1259a6;color:#fff;padding:1px 8px;border-radius:9px;font-weight:700;letter-spacing:.03em}
+  .cnote{padding:8px 14px;font-size:11px;color:#1259a6;background:#f4f8fe;border-bottom:1px solid #e0e8f3;line-height:1.5}
   .legend{display:flex;gap:8px;flex-wrap:wrap;padding:12px 24px;align-items:center}
   .chip{padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700}
   .chip.OLD{color:var(--old);background:var(--oldbg)}
@@ -80,10 +90,11 @@
 </head>
 <body>
 <header>
-  <h1>ISP Recharge Ticket Migration — Old vs New, 5 Sample Cases <span style="font-size:12px;color:#9fb3d1">(v2 — Jaivin's derivations 1–21 applied)</span></h1>
-  <p>Real production samples (data as of 2026-06-12 IST). Old source: Snowflake/Metabase live replicas. New schemas: csp-os-yaml/services migration SQL. plan_id &amp; service_address per CSP Migration Runbook (those two fields ONLY). csp_id via csp_gateway_service.csp_account. Customer enrichment via customer.i2e1.in GetCustomerByAccount (live-verified).</p>
+  <h1>CSP Old → New Data Migration — Old vs New Mapping <span style="font-size:12px;color:#9fb3d1">(ISP Recharge · Netbox / Devices)</span></h1>
+  <p>Real production samples (data as of 2026-06-13 IST). Old source: Snowflake/Metabase live replicas. New schemas: csp-os-yaml/services migration SQL + Master tables' list. csp_id via csp_gateway_service.csp_account. Enrichment via customer.i2e1.in GetCustomerByAccount (live-verified). Pick a workflow tab above, then a case.</p>
 </header>
 <div class="tabs" id="tabs"></div>
+<div id="subtabs"></div>
 <div class="legend">
   <span class="lbl">Provenance:</span>
   <span class="chip OLD">OLD — direct old-source value</span>
@@ -208,25 +219,147 @@ const CASES = [
 }
 ];
 
+// ===== NETBOX / DEVICES WORKFLOW (11 cases; central = ACS netbox_custody × CLOS connections) =====
+const CONN_NOTE = "Seeded upstream by the ISP-tickets & Install-tasks workflows — NOT seeded in this workflow. Used only as an INPUT state to classify the case.";
+function tdev(d){return {t:"t_device (postgres_rds_inventory_inventory) — PRIMARY",rows:d};}
+// common netbox_custody tail (identical across all 11 cases)
+const CUST_TAIL=[["idle_days","0","CONST","default"],["carry_fee_accrual_units","0","CONST","default"],["carry_fee_active","false","CONST","default"],["retrieval_start_date","NULL","NULL","no RETRIEVAL_PENDING case in scope"],["condition_classification","NULL","NULL","safe-to-omit"],["condition_detail","NULL","NULL","safe-to-omit"],["recovery_method","NULL","NULL","safe-to-omit"],["retrieval_reason","NULL","NULL","safe-to-omit"],["csp_never_had_custody","NULL","NULL","audit flag; safe-to-omit"],["version","1","CONST","@Version"],["correlation_id","'csp-migration-<batch-id>'","CONST","audit"],["causation_id","'csp-migration-<batch-id>'","CONST","audit"],["created_at","now()","CONST",""],["updated_at","now()","CONST",""]];
+const NETBOX_CASES=[
+{
+ id:1,title:"1 · DEPLOYED × PAUSED",dev:"100015",
+ rule:"t_device partner↔device mapping exists; device at customer (INSTALLED, user_account_id present). ISP window &lt; now() → upstream connection PAUSED. ACS reads the already-seeded connections.latest_recharge_window_end &lt; now().",
+ old:[
+  tdev([["device_id","100015"],["mac","30:DE:4B:3F:EB:66"],["nasid","301433"],["lco_account_id (partner)","274877937217"],["user_account_id (customer)","274877960826"],["serial","222B191013570"],["type / product","ROUTER / HOME_ROUTER"],["status","INSTALLED"],["unit_price","250"],["added_time","2023-02-06"]]),
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,rows:[["current_state","PAUSED"],["latest_recharge_window_end","2026-06-02 (&lt; today) ← isp_expiry_tracker.expiry_date for nas 301433"],["customer_id","274877960826"]]}
+ ],
+ neu:{custody:[["device_id","100015","OLD","t_device.device_id (PK)"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account.csp_id WHERE partner_id=274877937217"],["status","DEPLOYED","CASE","case 1"],["customer_id","274877960826","OLD","t_device.user_account_id (DEPLOYED)"],["connection_id","(upstream connection_id)","RULE","bound; from upstream connections seeding"],["connection_deactivated","false","RULE","not LOST/recovery"],["current_connection_id","(= connection_id)","RULE","active deployment"],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL","not IDLE"],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","NULL","NULL","computed at write-off only"],...CUST_TAIL],nbrec:null}
+},
+{
+ id:2,title:"2 · DEPLOYED × ACTIVE",dev:"100007",
+ rule:"Same as case 1 but ISP window &gt; now() → upstream connection ACTIVE (connections.latest_recharge_window_end &gt; now()).",
+ old:[
+  tdev([["device_id","100007"],["mac","30:DE:4B:40:42:8A"],["nasid","338912"],["lco_account_id (partner)","274877943039"],["user_account_id (customer)","274877983465"],["type / product","ROUTER / HOME_ROUTER"],["status","INSTALLED"],["unit_price","250"],["status_updated_at","2026-04-18"]]),
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,rows:[["current_state","ACTIVE"],["latest_recharge_window_end","2026-06-14 (&gt; today) ← isp_expiry_tracker.expiry_date for nas 338912"],["customer_id","274877983465"]]}
+ ],
+ neu:{custody:[["device_id","100007","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=274877943039"],["status","DEPLOYED","CASE","case 2"],["customer_id","274877983465","OLD","t_device.user_account_id"],["connection_id","(upstream connection_id)","RULE","bound"],["connection_deactivated","false","RULE",""],["current_connection_id","(= connection_id)","RULE","active deployment"],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","NULL","NULL",""],...CUST_TAIL],nbrec:null}
+},
+{
+ id:3,title:"3 · CUSTODIED × (no connection)",dev:"100071",
+ rule:"t_device mapping exists; user_account_id NULL now AND NEVER existed in public.t_device_audit → device never deployed → CUSTODIED, no connection.",
+ old:[
+  tdev([["device_id","100071"],["mac","30:DE:4B:3F:CD:9F"],["nasid","351442"],["lco_account_id (partner)","274877936126"],["user_account_id (customer)","NULL"],["serial","222B191010689"],["status","IDLE"],["unit_price","250"],["added_time","2023-11-05"]]),
+  {t:"t_device_audit (public) — ever-deployed proof",rows:[["audit rows for device","3"],["any row with user_account_id","0 → NEVER deployed"],["verdict","CUSTODIED (fresh stock)"]]},
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,absent:"No connection row — device never mapped to a customer (NULL-connection case)"}
+ ],
+ neu:{custody:[["device_id","100071","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=274877936126"],["status","CUSTODIED","CASE","case 3 — never deployed"],["customer_id","NULL","NULL","never deployed"],["connection_id","NULL","NULL","no connection"],["connection_deactivated","false","RULE",""],["current_connection_id","NULL","NULL",""],["last_connection_id","NULL","NULL","never deployed → no prior connection"],["idle_start_date","NULL","NULL","CUSTODIED, not IDLE"],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","NULL","NULL",""],...CUST_TAIL],nbrec:null}
+},
+{
+ id:4,title:"4 · IDLE × (no connection)",dev:"100020",
+ rule:"t_device mapping exists; user_account_id NULL now BUT EVER existed in public.t_device_audit → device was deployed before, now back with CSP → IDLE, no connection.",
+ old:[
+  tdev([["device_id","100020"],["mac","30:DE:4B:3F:D6:2D"],["nasid","NULL"],["lco_account_id (partner)","281749854637042"],["user_account_id (customer)","NULL"],["serial","222B191014453"],["status","IDLE"],["unit_price","250"],["status_updated_at","2026-04-05"]]),
+  {t:"t_device_audit (public) — ever-deployed proof",rows:[["audit rows for device","11,937"],["any row with user_account_id","1 → EVER deployed"],["verdict","IDLE (used → returned to CSP)"]]},
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,absent:"No active connection — device not currently mapped to a customer (NULL-connection case)"}
+ ],
+ neu:{custody:[["device_id","100020","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854637042"],["status","IDLE","CASE","case 4 — ever deployed"],["customer_id","NULL","NULL","not currently deployed"],["connection_id","NULL","NULL","no current connection"],["connection_deactivated","false","RULE",""],["current_connection_id","NULL","NULL",""],["last_connection_id","(prior connection — t_device_audit)","TBD","OQ-AC-05: last_connection if IDLE; needs prior connection_id mapping"],["idle_start_date","now()  (alt: t_device_audit.idle_start_date 2026-04-05)","RULE","OQ-AC-01: now() if IDLE vs carry legacy idle_start"],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","NULL","NULL",""],...CUST_TAIL],nbrec:null}
+},
+{
+ id:5,title:"5 · CUSTOMER_RECOVERY_PENDING × PENDING_DEACTIVATION",dev:"100906",
+ rule:"t_device mapping exists; connection for user_account_id is PENDING_DEACTIVATION (open ROUTER_PICKUP). Device at customer, recovery in flight. THE ONLY case that also seeds a TAS nbrec candidate.",
+ old:[
+  tdev([["device_id","100906"],["mac","9C:A2:F4:B1:EC:68"],["nasid","373936"],["lco_account_id (partner)","274877935681"],["user_account_id (customer)","274878001757"],["serial","2229060002386"],["status","TO_BE_PICKED_UP"],["status_updated_at","2026-05-28T07:47:08"]]),
+  {t:"tasks (ROUTER_PICKUP) — open pickup",rows:[["id","1779936074728121"],["status","1 (in progress)"],["created","2026-05-28T07:47:08"],["due_date","2026-06-18"],["remarks","Disconnect / Discontinue service"],["nas_id","373936"]]},
+  {t:"GetCustomerByAccount API (274878001757) — enrichment",rows:[["name","Nishant"],["mobile","8860730027"],["deviceId","100906"],["address","C-49, Moti Nagar, New Delhi 110015"]]},
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,rows:[["current_state","PENDING_DEACTIVATION"],["customer_id","274878001757"]]}
+ ],
+ neu:{custody:[["device_id","100906","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=274877935681"],["status","CUSTOMER_RECOVERY_PENDING","CASE","case 5"],["customer_id","274878001757","OLD","t_device.user_account_id"],["connection_id","(upstream connection_id)","RULE","bound"],["connection_deactivated","true","RULE","recovery pending → true"],["current_connection_id","(= connection_id)","RULE","still bound during recovery"],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","2026-05-28T07:47:08","OLD","legacy TO_BE_PICKED_UP timestamp (t_device.status_updated_at = pickup created)"],["lost_reason","NULL","NULL",""],["total_liability","NULL","NULL",""],...CUST_TAIL],
+  nbrec:[["execution_candidate_id","gen_random_uuid()","MINT","PK"],["state_version","0","CONST","default"],["device_id","100906","OLD","t_device.device_id (UNIQUE among active)"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=274877935681"],["last_connection_id","(upstream connection_id)","RULE","connection device was bound to"],["recovery_pending_since","2026-05-28T07:47:08","OLD","legacy TO_BE_PICKED_UP timestamp"],["zone_id","'UNKNOWN' (or enrichment)","RULE","from enrichment or 'UNKNOWN'"],["customer_address","C-49, Moti Nagar, New Delhi 110015","API","GetCustomerByAccount(274878001757).address"],["state","'PENDING_PICKUP'","CONST","runtime initialState"],["task_family","'NETBOX_PICKUP'","CONST","DB default"],["aggregation_type","'INDIVIDUAL'","CONST","post-V037"],["authority_entity_id","(device/recovery ref)","RULE","real-data; NOT NULL"],["object_id","(= device_id)","RULE","real-data; NOT NULL"],["locality","'UNKNOWN' (zone_id fallback)","RULE","NOT NULL"],["batch_key","NULL","NULL","INDIVIDUAL"],["incident_key","NULL","NULL",""],["reason_code","'RECOVERY_TASK_ASSIGNED'","CONST","runtime"],["reason_display_template","'task.nbrec.pending_pickup'","CONST",""],["deadline_at","recovery_pending_since + recovery_window","RULE","P_RECOVERY_MAX (e.g. 30d) → ~2026-06-27"],["is_csp_actionable","TRUE","CONST",""],["threshold_state","'NORMAL'","CONST","sweep recomputes"],["latest_attention_at","now() (migration ts)","CONST",""],["latest_attention_version","1","CONST",""],["latest_attention_type","'STATE_CHANGE'","CONST",""],["latest_attention_reason","'RECOVERY_TASK_ASSIGNED'","CONST",""],["acked_attention_version","0","CONST","unviewed"],["is_ocr_verified","FALSE","CONST",""],["verification_status","'NONE'","CONST",""],["verification_attempts","0","CONST",""],["migrated_customer","TRUE","RULE","V048 migration flag"],["created_at / updated_at","now()","CONST",""]]}
+},
+{
+ id:6,title:"6 · LOST × PENDING_DEACTIVATION",dev:"100026",
+ rule:"t_device mapping exists AND t_device.status = LOST → custody LOST. (Matrix associates LOST with the PENDING_DEACTIVATION connection row; the determinant is purely t_device.status=LOST.)",
+ old:[
+  tdev([["device_id","100026"],["mac","30:DE:4B:3F:E9:86"],["nasid","301364"],["lco_account_id (partner)","274877947660"],["user_account_id (customer)","274877949516"],["serial","222B191014124"],["status","LOST"],["status_updated_at","2026-01-19"]]),
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,rows:[["current_state","PENDING_DEACTIVATION (per matrix)"],["customer_id","274877949516"]]}
+ ],
+ neu:{custody:[["device_id","100026","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=274877947660"],["status","LOST","CASE","case 6 — t_device.status=LOST"],["customer_id","274877949516","OLD","t_device.user_account_id"],["connection_id","(upstream connection_id)","RULE","bound"],["connection_deactivated","true","RULE","LOST → true"],["current_connection_id","NULL","RULE","lost; connection deactivating"],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","NULL","NULL",""],["lost_reason","'CSP_CUSTODY_LOST'","RULE","OQ-AC-07; 'CSP_CUSTODY_LOST' or 'NOT_RECOVERED'"],["total_liability","NULL","NULL","computed at write-off only"],...CUST_TAIL],nbrec:null}
+},
+{
+ id:7,title:"7 · WRITTEN_OFF × PAUSED",dev:"100267",
+ rule:"device_id in public.written_off_devices with reversed=0 → WRITTEN_OFF. Connection-state input = PAUSED (ISP window &lt; now()).",
+ old:[
+  tdev([["device_id","100267"],["mac","AC:15:A2:D1:43:A1"],["nasid","393565"],["lco_account_id (partner)","274877943039"],["user_account_id (customer)","274878007923"],["serial","222A2J5003227"],["status","INSTALLED"]]),
+  {t:"written_off_devices (public)",rows:[["device_id","100267"],["partner_id","274877943039"],["amount","600.0"],["written_off_date","2024-10-07"],["write_off_cohort","April/May 2024"],["bucket","Partner_written_off_deduction"],["reversed","0"]]},
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,rows:[["current_state","PAUSED"],["latest_recharge_window_end","2025-02-09 (&lt; today)"],["customer_id","274878007923"]]}
+ ],
+ neu:{custody:[["device_id","100267","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=274877943039"],["status","WRITTEN_OFF","CASE","case 7"],["customer_id","274878007923","OLD","t_device.user_account_id"],["connection_id","(upstream connection_id)","RULE","bound"],["connection_deactivated","false","RULE","PAUSED (not LOST/recovery)"],["current_connection_id","(= connection_id)","RULE",""],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","⚠ NULL (candidate: 600 = written_off amount)","TBD","recommended safe-to-omit (computed at write-off); confirm whether to carry legacy amount"],...CUST_TAIL],nbrec:null}
+},
+{
+ id:8,title:"8 · WRITTEN_OFF × PENDING_DEACTIVATION",dev:"152307",
+ rule:"device_id in written_off_devices (reversed=0) → WRITTEN_OFF. Connection input = PENDING_DEACTIVATION (open ROUTER_PICKUP).",
+ old:[
+  tdev([["device_id","152307"],["mac","3C:52:A1:97:57:01"],["nasid","19999"],["lco_account_id (partner)","281749854619632"],["user_account_id (customer)","281749854634013"],["serial","2238042025228"],["status","INSTALLED"]]),
+  {t:"written_off_devices (public)",rows:[["device_id","152307"],["amount","0.0"],["written_off_date","2024-12-17"],["bucket","partner_tp_migration_settlement"],["reversed","0"]]},
+  {t:"tasks (ROUTER_PICKUP) — open pickup",rows:[["id","1781078955301433"],["status","0 (open)"],["created","2026-06-10"],["nas_id","19999"]]},
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,rows:[["current_state","PENDING_DEACTIVATION"],["customer_id","281749854634013"]]}
+ ],
+ neu:{custody:[["device_id","152307","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854619632"],["status","WRITTEN_OFF","CASE","case 8"],["customer_id","281749854634013","OLD","t_device.user_account_id"],["connection_id","(upstream connection_id)","RULE","bound"],["connection_deactivated","false","RULE","pending_deactivation (not LOST/recovery)"],["current_connection_id","(= connection_id)","RULE",""],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","⚠ NULL (candidate: 0 = written_off amount)","TBD","safe-to-omit; confirm carry-amount rule"],...CUST_TAIL],nbrec:null}
+},
+{
+ id:9,title:"9 · WRITTEN_OFF × ACTIVE",dev:"100866",
+ rule:"device_id in written_off_devices (reversed=0) → WRITTEN_OFF. Connection input = ACTIVE (ISP window &gt; now()) — device written off (accounting) yet customer still on an active plan.",
+ old:[
+  tdev([["device_id","100866"],["mac","AC:15:A2:C6:54:AB"],["nasid","32992"],["lco_account_id (partner)","281749854633388"],["user_account_id (customer)","281749854644261"],["serial","222A255008201"],["status","INSTALLED"]]),
+  {t:"written_off_devices (public)",rows:[["device_id","100866"],["amount","975.0"],["written_off_date","2024-07-30"],["bucket","Partner_written_off_deduction"],["reversed","0"]]},
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,rows:[["current_state","ACTIVE"],["latest_recharge_window_end","2026-06-29 (&gt; today)"],["customer_id","281749854644261"]]}
+ ],
+ neu:{custody:[["device_id","100866","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854633388"],["status","WRITTEN_OFF","CASE","case 9"],["customer_id","281749854644261","OLD","t_device.user_account_id"],["connection_id","(upstream connection_id)","RULE","bound"],["connection_deactivated","false","RULE","ACTIVE"],["current_connection_id","(= connection_id)","RULE",""],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","⚠ NULL (candidate: 975 = written_off amount)","TBD","safe-to-omit; confirm carry-amount rule"],...CUST_TAIL],nbrec:null}
+},
+{
+ id:10,title:"10 · WRITTEN_OFF × (no connection)",dev:"100043",
+ rule:"device_id in written_off_devices (reversed=0) → WRITTEN_OFF. user_account_id NULL → no connection.",
+ old:[
+  tdev([["device_id","100043"],["mac","30:DE:4B:3F:ED:FA"],["nasid","NULL"],["lco_account_id (partner)","281749854645918"],["user_account_id (customer)","NULL"],["serial","222B191013447"],["status","IDLE"]]),
+  {t:"written_off_devices (public)",rows:[["device_id","100043"],["amount","0.0"],["written_off_date","2025-05-02"],["bucket","Delisted_Partner_written_off"],["reversed","0"]]},
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,absent:"No connection row — device not mapped to a customer (NULL-connection case)"}
+ ],
+ neu:{custody:[["device_id","100043","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=281749854645918"],["status","WRITTEN_OFF","CASE","case 10"],["customer_id","NULL","NULL","no customer"],["connection_id","NULL","NULL","no connection"],["connection_deactivated","false","RULE",""],["current_connection_id","NULL","NULL",""],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","⚠ NULL (candidate: 0 = written_off amount)","TBD","safe-to-omit; confirm carry-amount rule"],...CUST_TAIL],nbrec:null}
+},
+{
+ id:11,title:"11 · PENDING_CSP_RECEIPT × (no connection)",dev:"100715",
+ rule:"t_device mapping exists AND t_device.status = DISPATCHED / IN_TRANSIT → device dispatched, CSP not yet confirmed receipt → PENDING_CSP_RECEIPT, no connection.",
+ old:[
+  tdev([["device_id","100715"],["mac","B4:B0:24:EB:A6:A8"],["nasid","NULL"],["lco_account_id (partner)","274877909095"],["user_account_id (customer)","NULL"],["serial","221C427004336"],["status","IN_TRANSIT"],["status_updated_at","2026-06-09"]]),
+  {t:"connections (CLOS)",input:true,note:CONN_NOTE,absent:"No connection row — device in transit to CSP, not deployed (NULL-connection case)"}
+ ],
+ neu:{custody:[["device_id","100715","OLD","t_device.device_id"],["csp_id","⚠ no csp_account row yet","LOOKUP","csp_account WHERE partner_id=274877909095"],["status","PENDING_CSP_RECEIPT","CASE","case 11 — DISPATCHED/IN_TRANSIT"],["customer_id","NULL","NULL","not deployed"],["connection_id","NULL","NULL","no connection"],["connection_deactivated","false","RULE",""],["current_connection_id","NULL","NULL",""],["last_connection_id","NULL","NULL",""],["idle_start_date","NULL","NULL",""],["recovery_pending_since","NULL","NULL",""],["lost_reason","NULL","NULL",""],["total_liability","NULL","NULL",""],...CUST_TAIL],nbrec:null}
+}
+];
+
 const NEWMETA = {
  connections:{label:"connections", svc:"CLOS · csp_connection_lifecycle_service"},
  cas:{label:"customer_access_states", svc:"CAEOS · csp_customer_access_service"},
  gates:{label:"recharge_gates", svc:"RV · csp_rv_service"},
  oblig:{label:"supply_recharge_obligations", svc:"CAEOS · csp_customer_access_service"},
  cand:{label:"recharge_execution_candidates", svc:"TAS · csp_tas_service"},
- oblidx:{label:"recharge_obligation_index", svc:"TAS · csp_tas_service — supportive (obligation_ref → candidate lookup)"}
+ oblidx:{label:"recharge_obligation_index", svc:"TAS · csp_tas_service — supportive (obligation_ref → candidate lookup)"},
+ custody:{label:"netbox_custody", svc:"ACS · csp_asset_custody_service — CENTRAL"},
+ nbrec:{label:"nbrec_execution_candidates", svc:"TAS · csp_tas_service"}
 };
 const ABSENT_WHY = {
  oblig:"No row — obligations required only for cases 1 and 3 (Jaivin #15)",
  cand:"No row — this case has no recharge execution candidate",
- oblidx:"No row — index row exists only when a candidate exists (cases 1 & 3)"
+ oblidx:"No row — index row exists only when a candidate exists (cases 1 & 3)",
+ nbrec:"No row — Nbrec candidate seeded only for case 5 (CUSTOMER_RECOVERY_PENDING); 'TAS Nbrec = Yes' on the matrix"
 };
 
 function esc(s){return String(s).replace(/&(?!amp;|lt;|gt;)/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
 function oldCard(c){
-  if(c.absent) return `<div class="card absent"><h3>${c.t}</h3><div class="why">${c.absent}</div></div>`;
+  const ic=c.input?" inputcard":"";
+  const pill=c.input?' <span class="ipill">INPUT · seeded upstream</span>':'';
+  if(c.absent) return `<div class="card absent${ic}"><h3>${c.t}${pill}</h3>${c.note?`<div class="cnote">${c.note}</div>`:''}<div class="why">${c.absent}</div></div>`;
   const rows=c.rows.map(r=>`<tr><td class="f">${esc(r[0])}</td><td class="v" colspan="2">${esc(r[1])}</td></tr>`).join("");
-  return `<div class="card"><h3>${c.t}</h3><table>${rows}</table></div>`;
+  return `<div class="card${ic}"><h3>${c.t}${pill}</h3>${c.note?`<div class="cnote">${c.note}</div>`:''}<table>${rows}</table></div>`;
 }
 function newCard(key,data){
   const m=NEWMETA[key];
@@ -234,14 +367,11 @@ function newCard(key,data){
   const rows=data.map(r=>`<tr class="t-${r[2]}"><td class="f">${esc(r[0])}</td><td class="v">${esc(r[1])}</td><td class="s"><span class="chip ${r[2]}">${r[2]}</span> ${esc(r[3]||"")}</td></tr>`).join("");
   return `<div class="card"><h3>${m.label} <span class="svc">— ${m.svc}</span></h3><table>${rows}</table></div>`;
 }
-const tabsEl=document.getElementById("tabs"), panesEl=document.getElementById("panes");
+const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById("subtabs"), panesEl=document.getElementById("panes");
 
-// ---- Approach tab (static) ----
+// ---- Approach pane (static) ----
 (function(){
-  const b=document.createElement("button");b.className="tab active";b.textContent="Approach & Process";
-  b.onclick=()=>{document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));document.querySelectorAll(".casepane").forEach(p=>p.classList.remove("active"));b.classList.add("active");document.getElementById("paneApproach").classList.add("active");};
-  tabsEl.appendChild(b);
-  const pane=document.createElement("div");pane.className="casepane active";pane.id="paneApproach";
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane_approach";
   pane.innerHTML=`
   <div class="banner" style="border-left-color:#5b2d91"><b>CSP Old → New Data Migration — How this works</b></div>
   <div class="flow3">
@@ -260,9 +390,14 @@ const tabsEl=document.getElementById("tabs"), panesEl=document.getElementById("p
     <div class="m"><b>⑤ Map + tag</b><span>Column-by-column, provenance chips</span></div>
     <div class="m"><b>⑥ Iterate</b><span>PM resolves TBD / ⚠ until none remain</span></div>
   </div>
+  <div class="side-title" style="margin-top:20px">WORKFLOWS (top tabs)</div>
+  <div class="flow6" style="grid-template-columns:repeat(2,1fr)">
+    <div class="m"><b>ISP Recharge — 5 cases</b><span>Central: CLOS connections × TAS recharge candidate. Join key = NAS_ID.</span></div>
+    <div class="m"><b>Netbox / Devices — 11 cases</b><span>Central: ACS netbox_custody × CLOS connections. Join key = DEVICE_ID. Connections here is an <b style="color:#1259a6">INPUT only</b> (seeded upstream by ISP-tickets &amp; Install-tasks), shown on the LEFT.</span></div>
+  </div>
   <div class="side-title" style="margin-top:20px">HOW TO READ A CASE TAB</div>
   <div class="readhint">
-    <div><span style="color:#0a7a3d;font-weight:800">LEFT</span> = OLD world (actual source rows)</div>
+    <div><span style="color:#0a7a3d;font-weight:800">LEFT</span> = OLD world (actual source rows; for Netbox, includes the upstream-seeded connection as an input)</div>
     <div class="arr">→</div>
     <div><span style="color:#5b2d91;font-weight:800">RIGHT</span> = NEW world (post-migration rows; every value carries a provenance chip — see legend above)</div>
     <div style="color:#b25b00">⚠ amber = open question for PM</div>
@@ -270,19 +405,43 @@ const tabsEl=document.getElementById("tabs"), panesEl=document.getElementById("p
   panesEl.appendChild(pane);
 })();
 
-CASES.forEach((cs,i)=>{
-  const b=document.createElement("button");b.className="tab";b.innerHTML="Case "+cs.title;b.onclick=()=>{document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));document.querySelectorAll(".casepane").forEach(p=>p.classList.remove("active"));b.classList.add("active");document.getElementById("pane"+cs.id).classList.add("active");};
-  tabsEl.appendChild(b);
-  const pane=document.createElement("div");pane.className="casepane";pane.id="pane"+cs.id;
+// ---- Workflows (2-tier nav) ----
+const WF={
+  isp:{label:"ISP Recharge", cases:CASES, rightKeys:["connections","cas","gates","oblig","cand","oblidx"], keyLabel:"NAS_ID", keyOf:cs=>cs.nas, oldTitle:"OLD WORLD (source rows, live prod replicas)"},
+  netbox:{label:"Netbox / Devices", cases:NETBOX_CASES, rightKeys:["custody","nbrec"], keyLabel:"DEVICE_ID", keyOf:cs=>cs.dev, oldTitle:"OLD WORLD — input rows (live prod replicas)"}
+};
+function buildCasePane(wfk,wf,cs){
+  const pane=document.createElement("div");pane.className="casepane";pane.id=`pane_${wfk}_${cs.id}`;
   pane.innerHTML=`
-    <div class="banner"><b>Case ${cs.title}</b> &nbsp;·&nbsp; NAS_ID <code>${cs.nas}</code><div class="rule">${cs.rule}</div></div>
+    <div class="banner"><b>Case ${cs.title}</b> &nbsp;·&nbsp; ${wf.keyLabel} <code>${wf.keyOf(cs)}</code><div class="rule">${cs.rule}</div></div>
     ${cs.warn?`<div class="warn">${cs.warn}</div>`:""}
     <div class="cols">
-      <div><div class="side-title">OLD WORLD (source rows, live prod replicas)</div>${cs.old.map(oldCard).join("")}</div>
-      <div><div class="side-title newW">NEW WORLD (post-migration rows)</div>${["connections","cas","gates","oblig","cand","oblidx"].map(k=>newCard(k,cs.neu[k])).join("")}</div>
+      <div><div class="side-title">${wf.oldTitle}</div>${cs.old.map(oldCard).join("")}</div>
+      <div><div class="side-title newW">NEW WORLD (post-migration rows)</div>${wf.rightKeys.map(k=>newCard(k,cs.neu[k])).join("")}</div>
     </div>`;
   panesEl.appendChild(pane);
+}
+Object.entries(WF).forEach(([wfk,wf])=>wf.cases.forEach(cs=>buildCasePane(wfk,wf,cs)));
+
+function showPane(id){document.querySelectorAll(".casepane").forEach(p=>p.classList.remove("active"));const el=document.getElementById(id);if(el)el.classList.add("active");}
+function setTop(k){document.querySelectorAll(".toptab").forEach(t=>t.classList.toggle("active",t.dataset.k===k));}
+function showApproach(){setTop("approach");subTabsEl.style.display="none";showPane("pane_approach");}
+function showWorkflow(wfk){
+  setTop(wfk);const wf=WF[wfk];
+  subTabsEl.style.display="flex";subTabsEl.innerHTML=`<span class="wflabel">${wf.label.toUpperCase()} — pick a case:</span>`;
+  wf.cases.forEach((cs,i)=>{
+    const b=document.createElement("button");b.className="subtab"+(i===0?" active":"");b.innerHTML=cs.title;
+    b.onclick=()=>{document.querySelectorAll(".subtab").forEach(t=>t.classList.remove("active"));b.classList.add("active");showPane(`pane_${wfk}_${cs.id}`);};
+    subTabsEl.appendChild(b);
+  });
+  showPane(`pane_${wfk}_${wf.cases[0].id}`);
+}
+[["approach","Approach & Process"],["isp","ISP Recharge"],["netbox","Netbox / Devices"]].forEach(([k,lbl])=>{
+  const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
+  b.onclick=()=> (k==="approach")?showApproach():showWorkflow(k);
+  tabsEl.appendChild(b);
 });
+showApproach();
 </script>
 </body>
 </html>
