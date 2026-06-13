@@ -135,7 +135,7 @@
 const CASES = [
 {
  id:1, title:"1 · ACTIVE + candidate EXISTS", nas:"281474977397447",
- means:"Live plan; a recharge is due — CSP must act.", cond:"No open pickup · ISP window &gt; today · a PENDING recharge ticket exists.",
+ means:"Live plan; a recharge is due — CSP must act.", cond:"No open pickup (or pickup with plan_start_date &gt; pickup creation) · expiry_date &gt; today · recharge_tickets has a PENDING row.",
  rule:"No open ROUTER_PICKUP · isp_expiry_tracker.expiry_date 2027-01-15 &gt; today · recharge_tickets has STATUS=PENDING row (335103) → CLOS ACTIVE, TAS candidate ACTION_REQUIRED",
  warn:"⚠ This customer has NO CLAIMED ticket ever (only the PENDING one) → recharge_gates.recharge_reference_id (= last claimed ticket id) has no value, but the column is NOT NULL and part of UNIQUE(connection_id, recharge_reference_id). Rule needed for zero-claimed-ticket customers.",
  old:[
@@ -160,7 +160,7 @@ const CASES = [
 },
 {
  id:2, title:"2 · ACTIVE + candidate DOES NOT EXIST", nas:"281474977310435",
- means:"Live plan; nothing pending.", cond:"No open pickup · ISP window &gt; today · no PENDING ticket.",
+ means:"Live plan; nothing pending.", cond:"No open pickup (or pickup with plan_start_date &gt; pickup creation) · expiry_date &gt; today · no PENDING recharge_tickets row.",
  rule:"No open ROUTER_PICKUP · expiry_date 2027-02-25 &gt; today · NO PENDING recharge ticket → CLOS ACTIVE, no TAS candidate",
  old:[
   {t:"isp_expiry_tracker (row 62234)",rows:[["isp_expiry_tracker_id","62234"],["partner_id","281749854635402"],["nas_id","281474977310435"],["expiry_date","2027-02-25T23:59:59+05:30"],["plan_status","ACTIVE"],["plan_id","1"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","FALSE"],["updated_at","2026-02-08T08:32:58+05:30"]]},
@@ -181,7 +181,7 @@ const CASES = [
 },
 {
  id:3, title:"3 · PAUSED + candidate EXISTS", nas:"281474977397713",
- means:"Plan expired; a recharge is due.", cond:"No open pickup · ISP window &lt; today · a PENDING recharge ticket exists.",
+ means:"Plan expired; a recharge is due.", cond:"No open pickup (or pickup with plan_start_date &gt; pickup creation) · expiry_date &lt; today · recharge_tickets has a PENDING row.",
  rule:"No open ROUTER_PICKUP · expiry_date 2026-06-11 &lt; today · PENDING recharge ticket (591036) → CLOS PAUSED, TAS candidate ACTION_REQUIRED",
  old:[
   {t:"isp_expiry_tracker (row 48171)",rows:[["isp_expiry_tracker_id","48171"],["partner_id","281749854733695"],["nas_id","281474977397713"],["expiry_date","2026-06-11T23:59:59+05:30 (EXPIRED)"],["plan_status","ACTIVE"],["plan_id","2"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","TRUE"],["updated_at","2026-05-12T18:00:22+05:30"]]},
@@ -205,7 +205,7 @@ const CASES = [
 },
 {
  id:4, title:"4 · PAUSED + candidate DOES NOT EXIST", nas:"281474977394766",
- means:"Plan expired; nothing pending.", cond:"No open pickup · ISP window &lt; today · no PENDING ticket.",
+ means:"Plan expired; nothing pending.", cond:"No open pickup (or pickup with plan_start_date &gt; pickup creation) · expiry_date &lt; today · no PENDING recharge_tickets row.",
  rule:"No open ROUTER_PICKUP · expiry_date 2026-06-11 &lt; today · NO PENDING recharge ticket → CLOS PAUSED, no TAS candidate",
  old:[
   {t:"isp_expiry_tracker (row 38909)",rows:[["isp_expiry_tracker_id","38909"],["partner_id","281749854659753"],["nas_id","281474977394766"],["expiry_date","2026-06-11T23:59:59+05:30 (EXPIRED)"],["plan_status","ACTIVE"],["plan_id","1"],["is_olt_router","FALSE"],["validation_source","DERIVED"],["is_payg","TRUE"],["updated_at","2026-06-07T08:12:06+05:30"]]},
@@ -226,7 +226,7 @@ const CASES = [
 },
 {
  id:5, title:"5 · PENDING_DEACTIVATION (no candidate)", nas:"281474977218548",
- means:"Customer being disconnected; pickup raised.", cond:"An open ROUTER_PICKUP task (status 0/1) exists.",
+ means:"Customer being disconnected; pickup raised.", cond:"ROUTER_PICKUP (status 0/1) exists AND recharge_requests.plan_start_date ≤ pickup creation. (status 2/3 ignored)",
  rule:"Open ROUTER_PICKUP exists (status 1, created 2026-06-07) · latest recharge_requests.customer_plan_start 2026-05-16 is NOT &gt; pickup creation → case 5. Note: tracker expiry 2026-08-31 is in the FUTURE — the pickup branch overrides the expiry test.",
  hi:"<b>SEEDING APPROACH (connections):</b> We do NOT seed the connection directly into PENDING_DEACTIVATION. We seed it in its <b>prior state</b> (ACTIVE/PAUSED) and then <b>create the pickup task from scratch</b> via the Nbrec creation API — that flow is what transitions the connection to PENDING_DEACTIVATION and creates the downstream tickets. So migration seeds the previous state; this resting state is reached <b>after</b> ticket creation. (Same mechanism as Netbox case 5.)",
  old:[
@@ -701,7 +701,7 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
 })();
 
 // ---- Workflows (2-tier nav) ----
-const ISP_OVW=`<b>How the 5 cases are built.</b> Central entities: CLOS <b>connection state</b> × whether a TAS <b>recharge candidate</b> exists. Connection = ACTIVE / PAUSED / PENDING_DEACTIVATION; a candidate exists only when a recharge is pending. Every migrated connection lands in exactly one case (MECE).`;
+const ISP_OVW=`<b>How the 5 cases are built.</b> Central entities: CLOS <b>connection state</b> × whether a TAS <b>recharge candidate</b> exists (ACTION_REQUIRED only — resolved candidates are not migrated). <b>Bifurcation gate:</b> first check for a ROUTER_PICKUP task with status <b>0 or 1</b> (ignore 2/3). If a pickup exists AND <code>recharge_requests.plan_start_date ≤ pickup creation</code> → <b>case 5</b> (Pending_Deactivation). Otherwise — no pickup, OR pickup with <code>plan_start_date &gt; pickup creation</code> — classify by <code>isp_expiry_tracker.expiry_date</code> vs today × whether <code>recharge_tickets</code> has a PENDING row → <b>cases 1–4</b>. Every connection lands in exactly one case (MECE).`;
 const NB_OVW=`<b>How the 10 cases are built.</b> Central entities: ACS <b>netbox_custody state</b> × CLOS <b>connection state</b> (connection is an input, seeded upstream). Custody is read from t_device (status + partner/customer mapping), the write-off ledger, and device history. Every CSP-mapped device lands in exactly one case (MECE). ACTIVE × WRITTEN_OFF is dropped — an active connection never goes to written-off.`;
 const WF={
   isp:{label:"ISP Recharge", cases:CASES, rightKeys:["connections","cas","gates","oblig","cand","oblidx"], keyLabel:"NAS_ID", keyOf:cs=>cs.nas, oldTitle:"OLD WORLD (source rows, live prod replicas)", overview:ISP_OVW},
