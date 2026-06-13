@@ -70,6 +70,12 @@
   tr.t-MINT td.v{color:var(--mint);background:var(--mintbg)}
   tr.t-TBD td.v{color:var(--tbd);background:var(--tbdbg)}
   tr.t-NULL td.v{color:var(--null);background:var(--nullbg)}
+  .chip.FILL{color:#c2410c;background:#ffedd5}
+  .chip.SYS{color:#475569;background:#e9eef5}
+  .chip.DERIVED{color:#0e6e6e;background:#e3f4f4}
+  tr.t-FILL td.v{color:#c2410c;background:#fff3e8;font-weight:700}
+  tr.t-SYS td.v{color:#475569;background:#eef2f7}
+  tr.t-DERIVED td.v{color:#0e6e6e;background:#e9f6f6}
   .warn{background:#fff4e5;border-left:4px solid #e8901a;padding:8px 12px;border-radius:4px;margin:0 0 14px;font-size:12px}
   .hilite{background:#efe7fb;border:1.5px solid #5b2d91;border-left:6px solid #5b2d91;padding:11px 15px;border-radius:6px;margin:0 0 14px;font-size:12.5px;line-height:1.6;color:#3d1d63}
   .hilite b{color:#5b2d91}
@@ -350,7 +356,11 @@ const NEWMETA = {
  cand:{label:"recharge_execution_candidates", svc:"TAS · csp_tas_service"},
  oblidx:{label:"recharge_obligation_index", svc:"TAS · csp_tas_service — supportive (obligation_ref → candidate lookup)"},
  custody:{label:"netbox_custody", svc:"ACS · csp_asset_custody_service — CENTRAL"},
- nbrec:{label:"nbrec_execution_candidates", svc:"TAS · csp_tas_service"}
+ nbrec:{label:"nbrec_execution_candidates", svc:"TAS · csp_tas_service"},
+ zones:{label:"zones", svc:"CCS · csp_capacity_coverage_service — zone definition + polygon"},
+ zelig:{label:"csp_zone_eligibility", svc:"CCS · csp_capacity_coverage_service — which CSP is eligible for which zone"},
+ zcaps:{label:"capacity_caps", svc:"CCS · csp_capacity_coverage_service — per-CSP-per-zone capacity"},
+ zexp:{label:"csp_zone_exposures", svc:"DAS · csp_demand_allocation_service — runtime routing mirror"}
 };
 const ABSENT_WHY = {
  oblig:"No row — obligations required only for cases 1 and 3 (Jaivin #15)",
@@ -358,145 +368,6 @@ const ABSENT_WHY = {
  oblidx:"No row — index row exists only when a candidate exists (cases 1 & 3)",
  nbrec:"No row — Nbrec candidate seeded only for case 5 (CUSTOMER_RECOVERY_PENDING); 'TAS Nbrec = Yes' on the matrix"
 };
-
-// ===== COMPENSATION DB =====
-const COMP_TABLES=[
-{id:"postures",title:"csp_compensation_postures",svc:"csp_compensation_service",
- desc:"Step 2 · Governs whether a CSP is eligible to receive compensation payouts in each billing cycle. One row per CSP — must exist for the compensation engine to process any payout.",
- warn:null,
- old:[{t:"Old DB Source",absent:"No old DB table queried for this step. csp_id comes from the CSP Creation API. All other values are constants or runtime-computed. onboarding_date = migration run date (not historical partner onboarding date)."}],
- neu:[
-  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
-  ["posture_state","COMP_STATE_FULL","CONST","fully eligible for payouts"],
-  ["posture_verification_status","VERIFIED","CONST","cleared — no re-verification required on migration"],
-  ["unverified_cycle_count","0","CONST","reset; VERIFIED status means no cycles tick"],
-  ["active_fpv_hold","false","CONST","migrated CSPs bypass First Payout Verification gate"],
-  ["active_restriction","false","CONST","no soft-penalty restriction at migration"],
-  ["active_suspension","false","CONST","no hard-penalty suspension at migration"],
-  ["onboarding_date","<current date at batch run>","RULE","set to migration run date, NOT historical partner onboarding date from old system"],
-  ["first_eligible_window_id","<next calendar month YYYY-MM>","RULE","excludes current partial cycle; derived as next month from run date"],
-  ["version","1","CONST","optimistic locking seed"],
-  ["created_at","NOW()","CONST",""],
-  ["updated_at","NOW()","CONST",""],
-  ["correlation_id","NULL","NULL","no originating event at migration time"],
-  ["causation_id","NULL","NULL","no originating event at migration time"]
- ]
-}
-];
-
-// ===== PAYMENT DB =====
-const PAY_TABLES=[
-{id:"deposit",title:"deposit_ledger_entries",svc:"csp_payment_settlement_service",
- desc:"Step 7 · Seeds each CSP's PSF deposit balance from the old system as an INITIAL_DEPOSIT ledger entry. Source: typeid:11 PSF accounts from T_ACCOUNT_BALANCE_SHEET1.",
- warn:"Paise conversion: BALANCE from old DB is in rupees. amount / current_ledger_balance / credited_balance = BALANCE × 100. Full precision, no rounding. Partners with no PSF account (typeid:11) are skipped entirely.",
- old:[{t:"T_ACCOUNT_BALANCE_SHEET1 (Snowflake · DB ID 113)",rows:[
-  ["account_id","partner_id (large integer)"],
-  ["BALANCE","closing PSF balance in rupees"],
-  ["Filter","typeid:11 PSF accounts only — matched via idparser(account_id) shard + localid join"],
-  ["Row selection","latest row per partner (MAX added_time)"]
- ]}],
- neu:[
-  ["id","gen_random_uuid()::TEXT","MINT","fresh UUID per row"],
-  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
-  ["entry_type","INITIAL_DEPOSIT","CONST","marks this as the opening migration entry"],
-  ["amount","BALANCE × 100 (paise)","OLD","T_ACCOUNT_BALANCE_SHEET1.BALANCE × 100"],
-  ["current_ledger_balance","BALANCE × 100 (paise)","OLD","same as amount — opening balance"],
-  ["credited_balance","BALANCE × 100 (paise)","OLD","same as amount — fully credited at open"],
-  ["claimed_balance","0","CONST","nothing claimed yet"],
-  ["cash_status","SETTLED","CONST",""],
-  ["netbox_id","NULL","NULL","not tied to a specific device"],
-  ["condition_ref","NULL","NULL","no condition clause"],
-  ["devices_issued","0","CONST","placeholder — updated by system post-migration"],
-  ["devices_returned","0","CONST","placeholder"],
-  ["devices_pending","0","CONST","placeholder"],
-  ["entry_sequence","1","CONST","first entry in this CSP's deposit ledger"],
-  ["created_at","NOW()","CONST",""]
- ]
-},
-{id:"bank",title:"csp_bank_accounts",svc:"csp_payment_settlement_service",
- desc:"Step 8 · Stores each CSP's Razorpay-linked bank account used for settlement withdrawals. One row per CSP.",
- warn:"Partners with no RAZORPAY_ACCOUNT_MAPPING row → skipped entirely. Partners with a row but NULL CONTACT_ID → still inserted with razorpay_contact_id = NULL. Account numbers shorter than 4 chars → use all available digits.",
- old:[
-  {t:"RAZORPAY_ACCOUNT_MAPPING (Snowflake)",rows:[
-   ["ACCOUNT_ID","= partner_id (join key)"],
-   ["ACCOUNT_NAME","account holder name"],
-   ["IFSC_CODE","bank IFSC code"],
-   ["ACCOUNT_NUMBER","full account number (not stored in new DB)"],
-   ["CONTACT_ID","Razorpay contact ID (nullable)"],
-   ["RAZORPAY_ACCOUNT_ID","Razorpay fund account ID (nullable)"],
-   ["MODIFIED_TIME","last modification"],
-   ["Row selection","latest active row per partner (FIVETRAN_DELETED=FALSE, ranked by ACTIVE desc + MODIFIED_TIME desc)"]
-  ]},
-  {t:"CSP_GATEWAY_SERVICE.CSP_ACCOUNT (Snowflake)",rows:[
-   ["PARTNER_ID","join key"],
-   ["CSP_ID","new system csp_id (Fivetran mirror of new CSP DB — cross-check only; Step 1 Excel tab is canonical)"],
-   ["Row selection","latest active row per PARTNER_ID"]
-  ]}
- ],
- neu:[
-  ["bank_account_id","gen_random_uuid()::TEXT","MINT","fresh UUID per row"],
-  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
-  ["account_holder_name","RAZORPAY_ACCOUNT_MAPPING.ACCOUNT_NAME","OLD","partner / business name"],
-  ["account_number_last_four","last 4 chars of ACCOUNT_NUMBER","OLD","full account number not stored; < 4 chars → use all"],
-  ["ifsc_code","RAZORPAY_ACCOUNT_MAPPING.IFSC_CODE","OLD",""],
-  ["bank_name","ifsc.razorpay.com/{IFSC} → BANK field","RULE","web-lookup per IFSC; cached per unique IFSC to avoid duplicate calls"],
-  ["branch_name","NULL","NULL","not available from source"],
-  ["account_type","SAVINGS","CONST",""],
-  ["verification_status","VERIFIED","CONST",""],
-  ["is_primary","true","CONST","only one bank account per CSP"],
-  ["verified_at","NOW()","CONST",""],
-  ["last_used_for_withdrawal_at","NULL","NULL","no withdrawal history at migration"],
-  ["version","1","CONST",""],
-  ["state","ACTIVE","CONST",""],
-  ["verified","true","CONST","legacy boolean flag alongside verification_status"],
-  ["razorpay_contact_id","RAZORPAY_ACCOUNT_MAPPING.CONTACT_ID","OLD","nullable — NULL if absent in old DB"],
-  ["razorpay_fund_account_id","RAZORPAY_ACCOUNT_MAPPING.RAZORPAY_ACCOUNT_ID","OLD","nullable — NULL if absent in old DB"],
-  ["created_at","NOW()","CONST",""],
-  ["updated_at","NOW()","CONST",""]
- ]
-},
-{id:"wallets",title:"wallets",svc:"csp_payment_settlement_service",
- desc:"Step 22 · Seeds each CSP's opening wallet balance migrated from the old partner app's closing balance. One row per CSP.",
- warn:"Paise conversion: balance from old DB is in rupees. wallet_balance = balance × 100. Edge case: partners not found in Snowflake → insert anyway with wallet_balance = 0 (do not skip).",
- old:[{t:"T_ACCOUNT_BALANCE_SHEET1 (Snowflake · DB ID 113)",rows:[
-  ["account_id","= partner_id (join key)"],
-  ["balance","closing wallet balance in rupees"],
-  ["old_balance","previous balance (for traceability only)"],
-  ["action","last transaction action"],
-  ["transaction_id","last transaction ID"],
-  ["Row selection","latest row per partner (ROW_NUMBER by added_time desc + id desc)"]
- ]}],
- neu:[
-  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
-  ["state","ACTIVE","CONST",""],
-  ["wallet_balance","balance × 100 (paise)","OLD","T_ACCOUNT_BALANCE_SHEET1.balance × 100; 0 if partner not found"],
-  ["reserved_for_settlement","0","CONST","nothing pending withdrawal at migration"],
-  ["version","1","CONST",""],
-  ["settlement_bind_bank_account_id","NULL","NULL","bank binding happens post-migration"],
-  ["created_at","NOW()","CONST",""],
-  ["updated_at","NOW()","CONST",""],
-  ["state_changed_at","NOW()","CONST",""]
- ]
-},
-{id:"wallet_ledger",title:"wallet_ledger_entries",svc:"csp_payment_settlement_service",
- desc:"Step 23 · Seeds an opening SETTLEMENT_CREDIT ledger entry per CSP. Reuses Q1 output from Step 22 — no new Snowflake query needed. Runs in the same batch as Step 22.",
- warn:"Paise conversion: amount and balance_after = balance × 100. Partners with balance = 0 still get a ledger row with amount = 0 and balance_after = 0.",
- old:[{t:"T_ACCOUNT_BALANCE_SHEET1 (Snowflake · DB ID 113)",rows:[
-  ["Source","Same Q1 output reused from Step 22 — no new query"],
-  ["balance","closing wallet balance in rupees → amount & balance_after in paise"]
- ]}],
- neu:[
-  ["id","gen_random_uuid()::TEXT","MINT","fresh UUID per row"],
-  ["csp_id","csp_account.csp_id WHERE partner_id = {partner_id}","LOOKUP","⚠ no csp_account row yet — read from Step 1 Excel output tab instead"],
-  ["entry_type","SETTLEMENT_CREDIT","CONST","opening migration credit entry"],
-  ["amount","balance × 100 (paise)","OLD","T_ACCOUNT_BALANCE_SHEET1.balance × 100"],
-  ["balance_after","balance × 100 (paise)","OLD","equals amount — this is the first entry, so balance after = amount credited"],
-  ["entry_sequence","1","CONST","first entry in this CSP's wallet ledger"],
-  ["line_item_description","Migration opening balance","CONST","human-readable label on wallet ledger screen"],
-  ["created_at","NOW()","CONST",""]
- ]
-}
-];
 
 function esc(s){return String(s).replace(/&(?!amp;|lt;|gt;)/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
 function oldCard(c){
@@ -584,6 +455,97 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
   panesEl.appendChild(pane);
 })();
 
+// ---- Zones pane (static — no states; 4 target tables on the right) ----
+(function(){
+  const Z_NOTE="Zones have NO state machine. Seeding = (1) zone definitions + polygons, (2) which CSP is eligible for which zone, (3) per-CSP-per-zone capacity. The RIGHT shows every column of the 4 target tables and what each needs. LEFT = the old-world source per column — you'll provide that via Excel.";
+  const zones=[
+   ["id","gen_random_uuid()","SYS","PK (surrogate)"],
+   ["zone_id","‹zone id›","FILL","unique zone identifier (VARCHAR 100)"],
+   ["zone_name","‹zone name›","FILL","human-readable zone name"],
+   ["boundary_polygon","‹WKT POLYGON / MULTIPOLYGON›","FILL","polygon lat-long coordinates as WKT TEXT — drives point-in-polygon zone resolution (V16)"],
+   ["effective_zone_class","'ZC_A'","CONST","default; FILL if real class known (ZC_A/B/C)"],
+   ["status","'ACTIVE'","CONST","ref_zone_statuses"],
+   ["redundancy_state","'NO_SUPPLY'","CONST","ref_redundancy_states"],
+   ["zone_version","1","CONST","≥1"],
+   ["pipeline_present","false","CONST",""],
+   ["active_connection_count","0 → recompute","DERIVED","count of active connections in zone (after connections seeded)"],
+   ["eligible_csp_count","0 → recompute","DERIVED","count of AUTHORIZED CSPs (after eligibility seeded)"],
+   ["predicted_zone_class / candidate_zone_class","NULL","SYS","omit"],
+   ["last_classification_change_cycle / zone_inactive_since / retiring_since","NULL","SYS","omit"],
+   ["version","1","CONST","@Version"],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const zelig=[
+   ["id","gen_random_uuid()","SYS","PK"],
+   ["csp_id","‹CSP id›","FILL","csp_account.csp_id — which CSP (VARCHAR 255 post-V14)"],
+   ["zone_id","‹zone id›","FILL","which zone"],
+   ["status","'AUTHORIZED'","FILL","eligibility — AUTHORIZED for a migrated eligible CSP (else PENDING/SUSPENDED/REVOKED)"],
+   ["custody_confirmed","true","FILL","CSP has device custody (likely true for serving CSPs)"],
+   ["geographic_reach_verified","true","FILL","service-area coverage verified"],
+   ["quality_state","NULL","SYS","first quality cycle populates"],
+   ["suspension_cycle_count / recovery_cycle_count","0","CONST",""],
+   ["operational_hold_active","false","CONST","V15"],
+   ["operational_hold_applied_at","NULL","SYS","V15"],
+   ["source","'OPS_AUTHORIZED'","CONST","V16 provenance"],
+   ["seeded_at / seeded_by_connection_id","NULL","SYS","V16; only if customer-app seed"],
+   ["version","1","CONST",""],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const zcaps=[
+   ["id","gen_random_uuid()","SYS","PK"],
+   ["csp_id","‹CSP id›","FILL","which CSP"],
+   ["zone_id","‹zone id›","FILL","which zone"],
+   ["current_cap","‹max connections (ceiling)›","FILL","current capacity ceiling — max connections this CSP may hold in this zone (≥1)"],
+   ["initial_cap","‹floor capacity›","FILL","initial/floor cap (≥1); contraction never drops below this"],
+   ["expansion_qualifying_cycle_count / contraction_qualifying_cycle_count","0","CONST",""],
+   ["cap_frozen","false","CONST",""],
+   ["floor_hit_count","0","CONST",""],
+   ["last_floor_hit_cycle / last_calibration_cycle","NULL","SYS","omit"],
+   ["calibration_reason","'ELIGIBLE'","CONST","V15; never NULL"],
+   ["source","'OPS_AUTHORIZED'","CONST","V16"],
+   ["seeded_at / seeded_by_connection_id","NULL","SYS","V16"],
+   ["version","1","CONST",""],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const zexp=[
+   ["id","gen_random_uuid()","SYS","PK"],
+   ["csp_id","‹CSP id›","FILL","which CSP (VARCHAR 255 post-V9)"],
+   ["zone_id","‹zone id›","FILL","which zone"],
+   ["exposure_band","‹band›","FILL","routing eligibility band (ref_exposure_bands) — INELIGIBLE_* blocks allocation"],
+   ["zone_eligible","true","FILL","mirrors csp_zone_eligibility"],
+   ["zone_classification","'ZC_A'","FILL","mirror of zones.effective_zone_class"],
+   ["p46_capacity_cap","‹cap (default 50)›","FILL","mirror of capacity_caps.current_cap"],
+   ["active_connections","0 → recompute","DERIVED","count of active connections for CSP in zone"],
+   ["zone_share","0.0","DERIVED","CSP share of zone"],
+   ["sla_state / enforcement_posture / exit_state","NULL","SYS","events populate"],
+   ["consecutive_compliant_cycles / tier3_consecutive_cycles","0","CONST",""],
+   ["onboarding_date","‹CSP onboarding date›","FILL","optional"],
+   ["last_exit_aborted_at","NULL","SYS","omit"],
+   ["version","1","CONST",""],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane_zones";
+  pane.innerHTML=`
+   <div class="banner" style="border-left-color:#0e6e6e"><b>Zones — 4 target tables to seed</b><div class="rule" style="margin-top:6px">${Z_NOTE}</div></div>
+   <div class="legend" style="padding:0 0 12px">
+     <span class="lbl">What each column needs:</span>
+     <span class="chip FILL">FILL — real value, source via Excel (you provide)</span>
+     <span class="chip CONST">CONST — migration default / constant</span>
+     <span class="chip DERIVED">DERIVED — computed after other tables seeded</span>
+     <span class="chip SYS">SYS — system-generated / omit</span>
+   </div>
+   <div class="warn">⚠ <b>csp_zone_exposures</b> is a DAS runtime <b>mirror</b> — it normally rebuilds itself from CCS events (CspZoneEligibility / CapacityCap / quality). Confirm whether we seed it directly or let it self-populate after the 3 CCS tables are seeded.</div>
+   <div class="cols">
+     <div><div class="side-title">OLD WORLD (sources)</div><div class="card inputcard"><h3>Sources <span class="ipill">VIA EXCEL — pending</span></h3><div class="cnote">You'll provide the old-world source for each <span class="chip FILL" style="font-size:10px">FILL</span> column (Excel sheet). CONST/SYS/DERIVED need no source.</div></div></div>
+     <div><div class="side-title newW">NEW WORLD — 4 target tables (right side)</div>${newCard("zones",zones)}${newCard("zelig",zelig)}${newCard("zcaps",zcaps)}${newCard("zexp",zexp)}</div>
+   </div>`;
+  panesEl.appendChild(pane);
+})();
+
 // ---- Workflows (2-tier nav) ----
 const WF={
   isp:{label:"ISP Recharge", cases:CASES, rightKeys:["connections","cas","gates","oblig","cand","oblidx"], keyLabel:"NAS_ID", keyOf:cs=>cs.nas, oldTitle:"OLD WORLD (source rows, live prod replicas)"},
@@ -603,40 +565,6 @@ function buildCasePane(wfk,wf,cs){
 }
 Object.entries(WF).forEach(([wfk,wf])=>wf.cases.forEach(cs=>buildCasePane(wfk,wf,cs)));
 
-// ---- Compensation & Payment DB schema panes ----
-function newSchemaCard(label,svc,rows){
-  const r=rows.map(r=>`<tr class="t-${r[2]}"><td class="f">${esc(r[0])}</td><td class="v">${esc(r[1])}</td><td class="s"><span class="chip ${r[2]}">${r[2]}</span> ${esc(r[3]||"")}</td></tr>`).join("");
-  return `<div class="card"><h3>${label} <span class="svc">— ${svc}</span></h3><table>${r}</table></div>`;
-}
-function buildDBPane(dbKey,tbl){
-  const pane=document.createElement("div");pane.className="casepane";pane.id=`pane_${dbKey}_${tbl.id}`;
-  const oldCards=tbl.old.map(oldCard).join("");
-  const neuCard=newSchemaCard(tbl.title,tbl.svc,tbl.neu);
-  const warnHtml=tbl.warn?`<div class="warn">⚠ ${esc(tbl.warn)}</div>`:"";
-  pane.innerHTML=`
-    <div class="banner"><b>${tbl.title}</b> <span style="font-size:12px;color:#667;font-weight:400">— ${tbl.svc}</span><div class="rule">${tbl.desc}</div></div>
-    ${warnHtml}
-    <div class="cols">
-      <div><div class="side-title">OLD WORLD — source tables</div>${oldCards}</div>
-      <div><div class="side-title newW">NEW TABLE — post-migration schema</div>${neuCard}</div>
-    </div>`;
-  panesEl.appendChild(pane);
-}
-COMP_TABLES.forEach(t=>buildDBPane("comp",t));
-PAY_TABLES.forEach(t=>buildDBPane("pay",t));
-
-function showDBWorkflow(dbKey,tables,label){
-  setTop(dbKey);
-  subTabsEl.style.display="flex";
-  subTabsEl.innerHTML=`<span class="wflabel">${label.toUpperCase()} — pick a table:</span>`;
-  tables.forEach((tbl,i)=>{
-    const b=document.createElement("button");b.className="subtab"+(i===0?" active":"");b.textContent=tbl.title;
-    b.onclick=()=>{document.querySelectorAll(".subtab").forEach(s=>s.classList.remove("active"));b.classList.add("active");showPane(`pane_${dbKey}_${tbl.id}`);};
-    subTabsEl.appendChild(b);
-  });
-  showPane(`pane_${dbKey}_${tables[0].id}`);
-}
-
 function showPane(id){document.querySelectorAll(".casepane").forEach(p=>p.classList.remove("active"));const el=document.getElementById(id);if(el)el.classList.add("active");}
 function setTop(k){document.querySelectorAll(".toptab").forEach(t=>t.classList.toggle("active",t.dataset.k===k));}
 function showStatic(k,paneId){setTop(k);subTabsEl.style.display="none";showPane(paneId);}
@@ -651,9 +579,10 @@ function showWorkflow(wfk){
   });
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["comp","Compensation DB"],["pay","Payment DB"]].forEach(([k,lbl])=>{
+const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones"};
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
-  b.onclick=()=> k==="approach"?showApproach():k==="sequencing"?showStatic("sequencing","pane_sequencing"):k==="comp"?showDBWorkflow("comp",COMP_TABLES,"Compensation DB"):k==="pay"?showDBWorkflow("pay",PAY_TABLES,"Payment DB"):showWorkflow(k);
+  b.onclick=()=> STATICTAB[k]?showStatic(k,STATICTAB[k]):showWorkflow(k);
   tabsEl.appendChild(b);
 });
 showApproach();

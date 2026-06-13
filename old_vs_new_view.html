@@ -70,6 +70,12 @@
   tr.t-MINT td.v{color:var(--mint);background:var(--mintbg)}
   tr.t-TBD td.v{color:var(--tbd);background:var(--tbdbg)}
   tr.t-NULL td.v{color:var(--null);background:var(--nullbg)}
+  .chip.FILL{color:#c2410c;background:#ffedd5}
+  .chip.SYS{color:#475569;background:#e9eef5}
+  .chip.DERIVED{color:#0e6e6e;background:#e3f4f4}
+  tr.t-FILL td.v{color:#c2410c;background:#fff3e8;font-weight:700}
+  tr.t-SYS td.v{color:#475569;background:#eef2f7}
+  tr.t-DERIVED td.v{color:#0e6e6e;background:#e9f6f6}
   .warn{background:#fff4e5;border-left:4px solid #e8901a;padding:8px 12px;border-radius:4px;margin:0 0 14px;font-size:12px}
   .hilite{background:#efe7fb;border:1.5px solid #5b2d91;border-left:6px solid #5b2d91;padding:11px 15px;border-radius:6px;margin:0 0 14px;font-size:12.5px;line-height:1.6;color:#3d1d63}
   .hilite b{color:#5b2d91}
@@ -350,7 +356,11 @@ const NEWMETA = {
  cand:{label:"recharge_execution_candidates", svc:"TAS · csp_tas_service"},
  oblidx:{label:"recharge_obligation_index", svc:"TAS · csp_tas_service — supportive (obligation_ref → candidate lookup)"},
  custody:{label:"netbox_custody", svc:"ACS · csp_asset_custody_service — CENTRAL"},
- nbrec:{label:"nbrec_execution_candidates", svc:"TAS · csp_tas_service"}
+ nbrec:{label:"nbrec_execution_candidates", svc:"TAS · csp_tas_service"},
+ zones:{label:"zones", svc:"CCS · csp_capacity_coverage_service — zone definition + polygon"},
+ zelig:{label:"csp_zone_eligibility", svc:"CCS · csp_capacity_coverage_service — which CSP is eligible for which zone"},
+ zcaps:{label:"capacity_caps", svc:"CCS · csp_capacity_coverage_service — per-CSP-per-zone capacity"},
+ zexp:{label:"csp_zone_exposures", svc:"DAS · csp_demand_allocation_service — runtime routing mirror"}
 };
 const ABSENT_WHY = {
  oblig:"No row — obligations required only for cases 1 and 3 (Jaivin #15)",
@@ -445,6 +455,97 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
   panesEl.appendChild(pane);
 })();
 
+// ---- Zones pane (static — no states; 4 target tables on the right) ----
+(function(){
+  const Z_NOTE="Zones have NO state machine. Seeding = (1) zone definitions + polygons, (2) which CSP is eligible for which zone, (3) per-CSP-per-zone capacity. The RIGHT shows every column of the 4 target tables and what each needs. LEFT = the old-world source per column — you'll provide that via Excel.";
+  const zones=[
+   ["id","gen_random_uuid()","SYS","PK (surrogate)"],
+   ["zone_id","‹zone id›","FILL","unique zone identifier (VARCHAR 100)"],
+   ["zone_name","‹zone name›","FILL","human-readable zone name"],
+   ["boundary_polygon","‹WKT POLYGON / MULTIPOLYGON›","FILL","polygon lat-long coordinates as WKT TEXT — drives point-in-polygon zone resolution (V16)"],
+   ["effective_zone_class","'ZC_A'","CONST","default; FILL if real class known (ZC_A/B/C)"],
+   ["status","'ACTIVE'","CONST","ref_zone_statuses"],
+   ["redundancy_state","'NO_SUPPLY'","CONST","ref_redundancy_states"],
+   ["zone_version","1","CONST","≥1"],
+   ["pipeline_present","false","CONST",""],
+   ["active_connection_count","0 → recompute","DERIVED","count of active connections in zone (after connections seeded)"],
+   ["eligible_csp_count","0 → recompute","DERIVED","count of AUTHORIZED CSPs (after eligibility seeded)"],
+   ["predicted_zone_class / candidate_zone_class","NULL","SYS","omit"],
+   ["last_classification_change_cycle / zone_inactive_since / retiring_since","NULL","SYS","omit"],
+   ["version","1","CONST","@Version"],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const zelig=[
+   ["id","gen_random_uuid()","SYS","PK"],
+   ["csp_id","‹CSP id›","FILL","csp_account.csp_id — which CSP (VARCHAR 255 post-V14)"],
+   ["zone_id","‹zone id›","FILL","which zone"],
+   ["status","'AUTHORIZED'","FILL","eligibility — AUTHORIZED for a migrated eligible CSP (else PENDING/SUSPENDED/REVOKED)"],
+   ["custody_confirmed","true","FILL","CSP has device custody (likely true for serving CSPs)"],
+   ["geographic_reach_verified","true","FILL","service-area coverage verified"],
+   ["quality_state","NULL","SYS","first quality cycle populates"],
+   ["suspension_cycle_count / recovery_cycle_count","0","CONST",""],
+   ["operational_hold_active","false","CONST","V15"],
+   ["operational_hold_applied_at","NULL","SYS","V15"],
+   ["source","'OPS_AUTHORIZED'","CONST","V16 provenance"],
+   ["seeded_at / seeded_by_connection_id","NULL","SYS","V16; only if customer-app seed"],
+   ["version","1","CONST",""],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const zcaps=[
+   ["id","gen_random_uuid()","SYS","PK"],
+   ["csp_id","‹CSP id›","FILL","which CSP"],
+   ["zone_id","‹zone id›","FILL","which zone"],
+   ["current_cap","‹max connections (ceiling)›","FILL","current capacity ceiling — max connections this CSP may hold in this zone (≥1)"],
+   ["initial_cap","‹floor capacity›","FILL","initial/floor cap (≥1); contraction never drops below this"],
+   ["expansion_qualifying_cycle_count / contraction_qualifying_cycle_count","0","CONST",""],
+   ["cap_frozen","false","CONST",""],
+   ["floor_hit_count","0","CONST",""],
+   ["last_floor_hit_cycle / last_calibration_cycle","NULL","SYS","omit"],
+   ["calibration_reason","'ELIGIBLE'","CONST","V15; never NULL"],
+   ["source","'OPS_AUTHORIZED'","CONST","V16"],
+   ["seeded_at / seeded_by_connection_id","NULL","SYS","V16"],
+   ["version","1","CONST",""],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const zexp=[
+   ["id","gen_random_uuid()","SYS","PK"],
+   ["csp_id","‹CSP id›","FILL","which CSP (VARCHAR 255 post-V9)"],
+   ["zone_id","‹zone id›","FILL","which zone"],
+   ["exposure_band","‹band›","FILL","routing eligibility band (ref_exposure_bands) — INELIGIBLE_* blocks allocation"],
+   ["zone_eligible","true","FILL","mirrors csp_zone_eligibility"],
+   ["zone_classification","'ZC_A'","FILL","mirror of zones.effective_zone_class"],
+   ["p46_capacity_cap","‹cap (default 50)›","FILL","mirror of capacity_caps.current_cap"],
+   ["active_connections","0 → recompute","DERIVED","count of active connections for CSP in zone"],
+   ["zone_share","0.0","DERIVED","CSP share of zone"],
+   ["sla_state / enforcement_posture / exit_state","NULL","SYS","events populate"],
+   ["consecutive_compliant_cycles / tier3_consecutive_cycles","0","CONST",""],
+   ["onboarding_date","‹CSP onboarding date›","FILL","optional"],
+   ["last_exit_aborted_at","NULL","SYS","omit"],
+   ["version","1","CONST",""],
+   ["created_at / updated_at","now()","SYS",""],
+   ["correlation_id / causation_id","'csp-migration-<batch>'","CONST","audit"]
+  ];
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane_zones";
+  pane.innerHTML=`
+   <div class="banner" style="border-left-color:#0e6e6e"><b>Zones — 4 target tables to seed</b><div class="rule" style="margin-top:6px">${Z_NOTE}</div></div>
+   <div class="legend" style="padding:0 0 12px">
+     <span class="lbl">What each column needs:</span>
+     <span class="chip FILL">FILL — real value, source via Excel (you provide)</span>
+     <span class="chip CONST">CONST — migration default / constant</span>
+     <span class="chip DERIVED">DERIVED — computed after other tables seeded</span>
+     <span class="chip SYS">SYS — system-generated / omit</span>
+   </div>
+   <div class="warn">⚠ <b>csp_zone_exposures</b> is a DAS runtime <b>mirror</b> — it normally rebuilds itself from CCS events (CspZoneEligibility / CapacityCap / quality). Confirm whether we seed it directly or let it self-populate after the 3 CCS tables are seeded.</div>
+   <div class="cols">
+     <div><div class="side-title">OLD WORLD (sources)</div><div class="card inputcard"><h3>Sources <span class="ipill">VIA EXCEL — pending</span></h3><div class="cnote">You'll provide the old-world source for each <span class="chip FILL" style="font-size:10px">FILL</span> column (Excel sheet). CONST/SYS/DERIVED need no source.</div></div></div>
+     <div><div class="side-title newW">NEW WORLD — 4 target tables (right side)</div>${newCard("zones",zones)}${newCard("zelig",zelig)}${newCard("zcaps",zcaps)}${newCard("zexp",zexp)}</div>
+   </div>`;
+  panesEl.appendChild(pane);
+})();
+
 // ---- Workflows (2-tier nav) ----
 const WF={
   isp:{label:"ISP Recharge", cases:CASES, rightKeys:["connections","cas","gates","oblig","cand","oblidx"], keyLabel:"NAS_ID", keyOf:cs=>cs.nas, oldTitle:"OLD WORLD (source rows, live prod replicas)"},
@@ -478,9 +579,10 @@ function showWorkflow(wfk){
   });
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"]].forEach(([k,lbl])=>{
+const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones"};
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
-  b.onclick=()=> k==="approach"?showApproach():k==="sequencing"?showStatic("sequencing","pane_sequencing"):showWorkflow(k);
+  b.onclick=()=> STATICTAB[k]?showStatic(k,STATICTAB[k]):showWorkflow(k);
   tabsEl.appendChild(b);
 });
 showApproach();
