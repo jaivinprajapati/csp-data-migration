@@ -740,9 +740,10 @@ function showWorkflow(wfk){
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
 const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc"};
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["svc","Service Tickets"]].forEach(([k,lbl])=>{
+const LINKTAB={install:"https://ashish-raj-wiom.github.io/csp-installation-migration/"};
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["svc","Service Tickets"],["install","Installation tasks ↗"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
-  b.onclick=()=> STATICTAB[k]?showStatic(k,STATICTAB[k]):showWorkflow(k);
+  b.onclick=()=> LINKTAB[k]?window.open(LINKTAB[k],"_blank"):STATICTAB[k]?showStatic(k,STATICTAB[k]):showWorkflow(k);
   tabsEl.appendChild(b);
 });
 showApproach();
