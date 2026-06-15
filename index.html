@@ -686,8 +686,8 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
    </div>
    <div class="cols">
      <div><div class="side-title">OLD WORLD (source)</div>
-       <div class="card"><h3>SERVICE_TICKET_MODEL (prod_db.public) — old Kapture tickets</h3>
-         <div class="cnote">Source for the 3 fetched fields. Filter: <code>LAST_TITLE IN (5 titles)</code> AND <code>IS_RESOLVED = 0</code>. Plan-active check not used. Anti-join <code>DBT_CSP.DIM_CSP</code> to skip already-migrated CSPs.</div>
+       <div class="card"><h3>DBT.SERVICE_TICKET_MODEL (Snowflake) — old Kapture tickets</h3>
+         <div class="cnote">Source for the 3 fetched fields. Filter: <code>LAST_TITLE</code> in the 5 in-scope titles AND <code>IS_RESOLVED = 0</code>. Plan-active check not used. Anti-join <code>DBT_CSP.DIM_CSP</code> to skip already-migrated CSPs. ⚠ <b>Verified 2026-06-15:</b> <code>LAST_TITLE</code> is prefixed/variant (e.g. <code>Internet Issues|Internet Supply Down</code>, <code>"Recharge done, but internet not working (RDNI)"</code>) — match via <b>ILIKE normalization, not literal equality</b> (literal <code>IN(…)</code> returns 0 rows).</div>
          <table>
            <tr><td class="f">CUSTOMER_ACCOUNT_ID</td><td class="v" colspan="2">→customer_id</td></tr>
            <tr><td class="f">KAPTURE_TICKET_ID</td><td class="v" colspan="2">→ticket_id</td></tr>
@@ -944,7 +944,7 @@ const PAY_TABLES=[
 
 // ===== QUALITY OS DB (4 tables — csp-quality-service; schema verified vs deployed Flyway V27) =====
 const QUAL_TABLES=[
-{id:"sla",title:"sla_state_records",neuTitle:"sla_state_records (12 cols — verified vs V4+V9+V10+V15+V20)",svc:"csp-quality-service · M-aggregate SLA state",
+{id:"sla",title:"sla_state_records",neuTitle:"sla_state_records (12 cols — verified vs V4+V9+V10+V15+V20; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M-aggregate SLA state",
  desc:"One row per migrated CSP holding the composite SLA state + the 15-day average active-connection count. CSP-scoped (one row per csp_id). Seed every migrated CSP as COMPLIANT so the first v1.17 evaluation cycle has a baseline row to transition from.",
  warn:"Schema drift vs the 2026-05-20 cohort CSV: V20 DROPPED zone_id (table is now CSP-scoped, UNIQUE on csp_id alone); V10 ADDED failing_metric_count; V15 ADDED tier_band. The old 'sla_state_records - v2.csv' INSERT still lists zone_id='csp_aggregate' and WILL FAIL on the current schema — drop zone_id from the column list.",
  old:[{t:"DBT_CSP.CONNECTION_LIFECYCLE_CONNECTIONS (Snowflake) — active-connection count",rows:[
@@ -969,9 +969,9 @@ const QUAL_TABLES=[
   ["updated_at","now()","CONST",""]
  ]
 },
-{id:"install",title:"install_maturation_ledger",neuTitle:"install_maturation_ledger (11 cols — verified vs V12)",svc:"csp-quality-service · M1 install ratio",
+{id:"install",title:"install_maturation_ledger",neuTitle:"install_maturation_ledger (11 cols — verified vs V12; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M1 install ratio",
  desc:"One row per install (per connection) recording its terminal outcome for the rolling 60-day M1 install-success-ratio window. numerator = matured-active installs; denominator = all terminal installs.",
- warn:"terminal_state is CHECK-constrained to EXACTLY: CONNECTION_ACTIVE, FAILED, CANCELLED_ONSITE, EXPIRED, CANCELLED_BY_UPSTREAM, CANCELLED_BY_CUSTOMER. Map the old install outcome onto one of these — any other value fails the CHECK. UNIQUE on connection_id (one row per connection).",
+ warn:"terminal_state is CHECK-constrained to EXACTLY: CONNECTION_ACTIVE, FAILED, CANCELLED_ONSITE, EXPIRED, CANCELLED_BY_UPSTREAM, CANCELLED_BY_CUSTOMER. UNIQUE on connection_id (one row per connection). Source→ledger mapping (verified via DBT_CSP.TAS_REF_INSTALL_CANDIDATE_STATE where IS_TERMINAL_FLAG=true): INSTALLATION_REPORTED_FAILED→FAILED · INSTALLATION_CANCELLED_ONSITE→CANCELLED_ONSITE · INSTALLATION_EXPIRED→EXPIRED · CONNECTION_ACTIVE / CANCELLED_BY_UPSTREAM / CANCELLED_BY_CUSTOMER pass through. Only terminal candidates seed (in-progress states excluded).",
  old:[{t:"DBT_CSP.FACT_INSTALL_CANDIDATES / booking-to-install journey (Snowflake)",rows:[
    ["connection_id","new CL connection_id for the install"],
    ["terminal outcome","install end state → terminal_state (mapped to the 6 allowed codes)"],
@@ -994,7 +994,7 @@ const QUAL_TABLES=[
   ["updated_at","now()","CONST",""]
  ]
 },
-{id:"rating",title:"customer_rating_records",neuTitle:"customer_rating_records (9 cols — verified vs V13)",svc:"csp-quality-service · M5 customer rating",
+{id:"rating",title:"customer_rating_records",neuTitle:"customer_rating_records (9 cols — verified vs V13; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M5 customer rating",
  desc:"One row per individual customer rating (1–5) for a connection. Supports multiple ratings per connection. Feeds the M5 customer-rating metric.",
  warn:"event_id is UNIQUE + NOT NULL (idempotency key) — the source rating has no new-system event_id, so MINT a fresh UUID per rating row at migration. rating must be 1–5 (CHECK).",
  old:[{t:"DBT_RATING_SERVICE.RATING (Snowflake) — customer ratings",rows:[
@@ -1018,9 +1018,9 @@ const QUAL_TABLES=[
   ["updated_at","now()","CONST",""]
  ]
 },
-{id:"telemetry",title:"telemetry_rollup_records",neuTitle:"telemetry_rollup_records (11 cols — verified vs V14+V25)",svc:"csp-quality-service · T1 optical / T2 speed",
+{id:"telemetry",title:"telemetry_rollup_records",neuTitle:"telemetry_rollup_records (11 cols — verified vs V14+V25; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · T1 optical / T2 speed",
  desc:"One row per CSP per signal_date holding daily optical (in-range pings) and speed (peak-hour OK tests) numerator/denominator counts, accumulated over the 60-day tier window. Produced by the csp-quality-rollup pipeline (rollup-v1.0/v2) over Snowflake ping + speedtest tables.",
- warn:"TWO fixes vs the 2026-05-20 telemetry CSV. (1) V25 RENAMED columns: observation_date→signal_date, oor_ping_count→optical_numerator, total_ping_count→optical_denominator, peak_ok_count→speed_numerator, peak_total_count→speed_denominator (and TRUNCATEd old rows). (2) optical_numerator is IN-RANGE pings, NOT out-of-range — the prior INSERT loaded the OOR count (e.g. 11374) which after the rename inverts the optical metric to 22.1% instead of 77.9%. Use OPTICAL_IN_RANGE_PINGS (e.g. 40099) for optical_numerator.",
+ warn:"TWO fixes vs the 2026-05-20 telemetry CSV. (1) V25 RENAMED columns: observation_date→signal_date, oor_ping_count→optical_numerator, total_ping_count→optical_denominator, peak_ok_count→speed_numerator, peak_total_count→speed_denominator (and TRUNCATEd old rows). (2) optical_numerator is IN-RANGE pings, NOT out-of-range — the prior INSERT loaded the OOR count (e.g. 11374) which after the rename inverts the optical metric to 22.1% instead of 77.9%. Use OPTICAL_IN_RANGE_PINGS (e.g. 40099) for optical_numerator. VERIFIED 2026-06-15 vs live prod: this table is maintained by the live csp-quality-rollup pipeline (rows dated 2026-06-13, optical avg 76.7%, 0 rows with numerator>denominator) — so prod is already correct; the inversion risk applies ONLY to a hand-written backfill that naively reuses the old CSV. Prefer running the rollup pipeline in backfill mode for the new cohort.",
  old:[{t:"csp-quality-rollup pipeline — Snowflake DBT.HOURLY_DEVICE_PING_INFLUX (optical) + speedtest tables",rows:[
    ["SIGNAL_DATE","per-day → signal_date"],
    ["OPTICAL_IN_RANGE_PINGS","in-range pings → optical_numerator  ⚠ (NOT the OOR count)"],
