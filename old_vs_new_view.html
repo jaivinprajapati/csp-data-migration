@@ -465,7 +465,8 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
    ["CSP exposure (Payments)","Payment-Settlement · csp_exposure"],
    ["Tax profiles","Tax profile records"],
    ["CSP bank accounts","Payment-Settlement · csp_bank_accounts"],
-   ["Quality OS","Quality · sla_state_records / domain_state_records"],
+   ["Quality OS — seed","Quality · seed sla_state_records FIRST, then telemetry_rollup_records / install_maturation_ledger / customer_rating_records (+ SR complaints with pre-minted complaint_id) — see Quality OS tab. Schema verified vs prod V27."],
+   ["Quality OS — daily compute","POST /internal/task/daily-window (no auth, fleet-wide) → daily_metric_snapshots (M1–M6 + composite + tier) from the seeded data; on a decider day (1st/16th IST) also runs the per-CSP evaluation cycle. Run AFTER Quality seeding (job iterates sla_state_records). On-demand tier: POST /internal/task/evaluation-cycle per csp_id (auth-gated)."],
    ["Wallets","Payment-Settlement · wallets"],
    ["Old wallet freeze","API call (old app)","kb"],
    ["Old wallet = 0","API call (old app)","kb"],
@@ -574,7 +575,7 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
 // ---- Service Tickets pane (static — single case; connection × complaint, ASSIGNED) ----
 (function(){
   const complaints=[
-   ["complaint_id","gen_random_uuid()","SYS","PK (SRS-generated)"],
+   ["complaint_id","gen_random_uuid()::text — pre-minted at migration","MINT","PK uploaded DIRECTLY into the SR complaints table (not SRS-generated). Mint one UUID per ticket at extract; this same value is the complaints PK and the FK referenced by complaint_tasks / restore candidate. (2026-05-20 sr_complaints.csv already does this: its ID column = the minted complaint_id, KAPTURE id → ticket_id.)"],
    ["connection_id","‹resolved›","DERIVED","resolved by SRS from CL by-customer lookup"],
    ["zone_id","‹resolved›","DERIVED","from the resolved connection"],
    ["customer_id","‹customer_account_id›","OLD","SERVICE_TICKET_MODEL.CUSTOMER_ACCOUNT_ID"],
@@ -671,7 +672,137 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
   ];
   const pane=document.createElement("div");pane.className="casepane";pane.id="pane_svc";
   pane.innerHTML=`
-   <div class="banner" style="border-left-color:#7c2d12"><b>Service Tickets — single case (connection × complaint, end state ASSIGNED)</b>
+   <div class="banner" style="border-left-color:#7c2d12"><b>Quality — Service Tickets — single case (migration: pre-minted complaint_id)</b>
+     <div class="rule" style="margin-top:6px">Central entity = CLOS connections × SRS <code>complaints</code>. We create complaints only for the <b>ASSIGNED</b> end state. <b>A connection in ANY state can have a ticket created</b> — the only requirement is that the connection exists. Three fields are fetched from the old source (<code>customer_id</code>, <code>ticket_id</code>, <code>problem</code>); SRS then resolves <code>connection_id / zone_id / csp_id</code>, classifies the problem, and the downstream TAS restore candidate is created on ASSIGNED.</div>
+   </div>
+   <div class="hilite"><b>Ticket titles in scope (5)</b> — all classify to SERVICE_ISSUE → RESTORE → ASSIGNED: Internet Supply Down · Recharge done but internet not working · Frequent Disconnection · Slow Speed/Range Issues · Optical Power Out of Range. Plan-active (15-day) check is <b>NOT used</b>.</div>
+   <div class="hilite" style="border-left-color:#9c1d7a;background:#fbe9f5;color:#5b1147"><b>complaint_id = pre-minted UUID (migration path).</b> Unlike the live flow (where SRS mints the id on the intake POST), for migration we <b>generate the UUID ourselves at extract</b> and upload it straight into the SR <code>complaints</code> table as the <code>complaint_id</code> PK. Source field <code>KAPTURE_TICKET_ID</code> → <code>ticket_id</code> (kept for traceability); the minted UUID is what <code>complaint_tasks</code> and the TAS <code>restore_execution_candidates</code> reference. Old source = <code>DBT.SERVICE_TICKET_MODEL</code> (filter <code>LAST_TITLE</code> IN the 5 titles; anti-join <code>DBT_CSP.DIM_CSP</code> to skip already-migrated CSPs).</div>
+   <div class="legend" style="padding:0 0 12px">
+     <span class="lbl">Tags:</span>
+     <span class="chip OLD">OLD — from old source</span>
+     <span class="chip DERIVED">DERIVED — SRS resolves/classifies at intake</span>
+     <span class="chip API">API — i2e1 customer enrichment</span>
+     <span class="chip CONST">CONST — flow constant</span>
+     <span class="chip SYS">SYS — system / default</span>
+   </div>
+   <div class="cols">
+     <div><div class="side-title">OLD WORLD (source)</div>
+       <div class="card"><h3>DBT.SERVICE_TICKET_MODEL (Snowflake) — old Kapture tickets</h3>
+         <div class="cnote">Source for the 3 fetched fields. Filter: <code>LAST_TITLE</code> in the 5 in-scope titles AND <code>IS_RESOLVED = 0</code>. Plan-active check not used. Anti-join <code>DBT_CSP.DIM_CSP</code> to skip already-migrated CSPs. ⚠ <b>Verified 2026-06-15:</b> <code>LAST_TITLE</code> is prefixed/variant (e.g. <code>Internet Issues|Internet Supply Down</code>, <code>"Recharge done, but internet not working (RDNI)"</code>) — match via <b>ILIKE normalization, not literal equality</b> (literal <code>IN(…)</code> returns 0 rows).</div>
+         <table>
+           <tr><td class="f">CUSTOMER_ACCOUNT_ID</td><td class="v" colspan="2">→customer_id</td></tr>
+           <tr><td class="f">KAPTURE_TICKET_ID</td><td class="v" colspan="2">→ticket_id</td></tr>
+           <tr><td class="f">LAST_TITLE</td><td class="v" colspan="2">→problem (one of the 5 titles)</td></tr>
+           <tr><td class="f">IS_RESOLVED</td><td class="v" colspan="2">filter = 0 (open)</td></tr>
+           <tr><td class="f">CURRENT_PARTNER_ACCOUNT_ID</td><td class="v" colspan="2">anti-join vs already-migrated CSPs</td></tr>
+         </table></div>
+     </div>
+     <div><div class="side-title newW">NEW WORLD — 3 target tables</div>${newCard("complaints",complaints)}${newCard("ctasks",ctasks)}${newCard("restcand",restcand)}</div>
+   </div>`;
+  panesEl.appendChild(pane);
+})();
+
+// ---- ACTIVE Service Tickets pane (main original — live SRS-intake flow) ----
+(function(){
+  const complaints=[
+   ["complaint_id","gen_random_uuid()","SYS","PK (SRS-generated)"],
+   ["connection_id","‹resolved›","DERIVED","resolved by SRS from CL by-customer lookup"],
+   ["zone_id","‹resolved›","DERIVED","from the resolved connection"],
+   ["customer_id","‹customer_account_id›","OLD","SERVICE_TICKET_MODEL.CUSTOMER_ACCOUNT_ID"],
+   ["csp_id","‹resolved CSP›","DERIVED","from the resolved connection"],
+   ["status","ASSIGNED","CONST","INTAKE→CLASSIFIED→ASSIGNED, synchronous in the POST"],
+   ["primary_class","SERVICE_ISSUE","DERIVED","classified from problem title"],
+   ["secondary_subtype","NO_INTERNET / SLOW_INTERNET / FREQUENT_DISCONNECTION / RECHARGE_DONE_NO_INTERNET / OPTICAL_POWER_OUT_OF_RANGE","DERIVED","classified from problem title"],
+   ["intake_channel","CALL_CENTER","CONST","call-center intake"],
+   ["executor_type","CSP","DERIVED","SERVICE_ISSUE → CSP"],
+   ["executor_id","‹resolved CSP›","DERIVED","= csp_id"],
+   ["ticket_id","‹kapture_ticket_id›","OLD","SERVICE_TICKET_MODEL.KAPTURE_TICKET_ID (V11)"],
+   ["intake_timestamp","now()","SYS",""],
+   ["classification_timestamp","now()","SYS",""],
+   ["assigned_at","now()","SYS",""],
+   ["sla_at","computed (working-hrs)","DERIVED","classification + first-response SLA (V13)"],
+   ["within_tat","NULL","NULL","set at resolution (V13)"],
+   ["escalation_count / escalation_tier","0","SYS","default"],
+   ["submission_count","1","SYS","default"],
+   ["contact_attempt_count","0","SYS","default"],
+   ["signal_emitted","false","SYS","default"],
+   ["is_reopen / reopen_count","false / 0","SYS","default"],
+   ["lineage_id","NULL","NULL",""],
+   ["resolution_outcome / unresolvable_reason","NULL","NULL","resolution-phase"],
+   ["verification_method / customer_verification_outcome","NULL","NULL","verification-phase"],
+   ["complaint_resolution_minutes / verification_latency_minutes","NULL","NULL",""],
+   ["verification_started_at / resolved_at / closed_timestamp","NULL","NULL",""],
+   ["resolution_type","NULL","NULL","V9 device-swap"],
+   ["device_swap_old_device_id / new_device_id / initiated_at / completed_at","NULL","NULL","V9"],
+   ["version","1","SYS","@Version"],
+   ["correlation_id","'csp-migration-<batch>'","CONST","audit"],
+   ["causation_id","NULL","SYS",""],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const ctasks=[
+   ["task_id","gen_random_uuid()","SYS","PK"],
+   ["complaint_id","‹complaint_id›","DERIVED","FK to complaints"],
+   ["executor_type","CSP","DERIVED",""],
+   ["executor_id","‹resolved CSP›","DERIVED",""],
+   ["task_type","RESTORE","DERIVED","SERVICE_ISSUE → RESTORE"],
+   ["zone_id","‹resolved›","DERIVED","from complaint"],
+   ["status","OPEN","CONST",""],
+   ["response_sla_deadline","now + first_response_sla","DERIVED",""],
+   ["reassignment_count","0","SYS","default"],
+   ["first_response_at","NULL","NULL","V12; set when CSP first responds"],
+   ["diagnosis_outcome / diagnosis_fault_type","NULL","NULL","V9"],
+   ["version","1","SYS","@Version"],
+   ["correlation_id / causation_id","corr-id / NULL","CONST",""],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const restcand=[
+   ["execution_candidate_id","gen_random_uuid()","SYS","PK"],
+   ["state_version","0","SYS","default"],
+   ["authority_entity_id","‹complaint_id›","DERIVED","= complaint_id (from event)"],
+   ["csp_id","‹resolved CSP›","DERIVED","from event"],
+   ["candidate_type","RESTORE","CONST",""],
+   ["state","PENDING_ACCEPTANCE","CONST","initial restore state"],
+   ["task_family","RESTORE","CONST",""],
+   ["aggregation_type","INDIVIDUAL","CONST",""],
+   ["reason_code","‹restore reason›","DERIVED","from event"],
+   ["reason_display_template","‹template›","CONST",""],
+   ["deadline_at","= sla_at","DERIVED","from event (V1.6.2)"],
+   ["object_id","‹complaint/connection ref›","DERIVED","NOT NULL"],
+   ["locality","‹zone_id›","DERIVED","NOT NULL"],
+   ["batch_key / incident_key","NULL","NULL","INDIVIDUAL"],
+   ["is_csp_actionable","true","CONST",""],
+   ["threshold_state","NORMAL","CONST",""],
+   ["complaint_id","‹complaint_id›","DERIVED","from event"],
+   ["task_id","‹task_id›","DERIVED","from event"],
+   ["primary_class","SERVICE_ISSUE","DERIVED",""],
+   ["secondary_subtype","‹subtype›","DERIVED",""],
+   ["connection_id","‹connection_id›","DERIVED","from event"],
+   ["zone_id","‹zone_id›","DERIVED","from event"],
+   ["latest_attention_at","now()","SYS",""],
+   ["latest_attention_version","1","SYS",""],
+   ["latest_attention_type","STATE_CHANGE","CONST",""],
+   ["latest_attention_reason","‹reason›","DERIVED",""],
+   ["acked_attention_version","0","SYS","unviewed"],
+   ["escalation_note","NULL","NULL","V040"],
+   ["system_verification_result","NOT_RUN","CONST","V040"],
+   ["customer_verification_result","NOT_RUN","CONST","V040"],
+   ["diagnosis_device_id / diagnosis_fault_code","NULL","NULL","V040"],
+   ["assigned_technician_id","NULL","NULL","V040"],
+   ["ticket_id","‹kapture_ticket_id›","DERIVED","V049 (from event)"],
+   ["customer_account_id","‹customer_id›","DERIVED","V049 (NOT NULL default '')"],
+   ["customer_name","‹enrichment›","API","V049 GetCustomerByAccount"],
+   ["customer_mobile","‹enrichment›","API","V049"],
+   ["customer_address","‹enrichment›","API","V049"],
+   ["google_address_id","‹enrichment›","API","V049"],
+   ["device_id","‹enrichment›","API","V049"],
+   ["isp_identifier_type / isp_identifier_value","‹enrichment›","API","V049"],
+   ["enrichment_retry_count","0","SYS","V049"],
+   ["resolved_by_actor_id / resolved_by_actor_type","NULL","NULL","V067"],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane_asvc";
+  pane.innerHTML=`
+   <div class="banner" style="border-left-color:#7c2d12"><b>Active Service Tickets — single case (live SRS-intake flow)</b>
      <div class="rule" style="margin-top:6px">Central entity = CLOS connections × SRS <code>complaints</code>. We create complaints only for the <b>ASSIGNED</b> end state. <b>A connection in ANY state can have a ticket created</b> — the only requirement is that the connection exists. Three fields are fetched from the old source (<code>customer_id</code>, <code>ticket_id</code>, <code>problem</code>); SRS then resolves <code>connection_id / zone_id / csp_id</code>, classifies the problem, and the downstream TAS restore candidate is created on ASSIGNED.</div>
    </div>
    <div class="hilite"><b>Ticket titles in scope (5)</b> — all classify to SERVICE_ISSUE → RESTORE → ASSIGNED: Internet Supply Down · Recharge done but internet not working · Frequent Disconnection · Slow Speed/Range Issues · Optical Power Out of Range. Plan-active (15-day) check is <b>NOT used</b>.</div>
@@ -941,6 +1072,136 @@ const PAY_TABLES=[
 }
 ];
 
+// ===== QUALITY OS DB (4 tables — csp-quality-service; schema verified vs deployed Flyway V27) =====
+const QUAL_TABLES=[
+{id:"sla",title:"sla_state_records",neuTitle:"sla_state_records (12 cols — verified vs V4+V9+V10+V15+V20; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M-aggregate SLA state",
+ desc:"One row per migrated CSP holding the composite SLA state + the 15-day average active-connection count. CSP-scoped (one row per csp_id). Seed every migrated CSP as COMPLIANT so the first v1.17 evaluation cycle has a baseline row to transition from.",
+ warn:"Schema drift vs the 2026-05-20 cohort CSV: V20 DROPPED zone_id (table is now CSP-scoped, UNIQUE on csp_id alone); V10 ADDED failing_metric_count; V15 ADDED tier_band. The old 'sla_state_records - v2.csv' INSERT still lists zone_id='csp_aggregate' and WILL FAIL on the current schema — drop zone_id from the column list.",
+ old:[{t:"DBT_CSP.CONNECTION_LIFECYCLE_CONNECTIONS (Snowflake) — active-connection count",rows:[
+   ["csp_id","new-system csp_id (group key)"],
+   ["current_state","count where ACTIVE → active_connection_count"],
+   ["Row selection","one aggregate row per csp_id; AVG active connections over trailing 15 days (IST). Old label: 'SUM of AVG_ACTIVE_CONNECTION_COUNT_15D'"]
+ ]},{t:"CSP · csp_account (CSP_GATEWAY_SERVICE)",input:true,note:"Resolves partner_id → csp_id. Step-1 Excel output tab is canonical; csp_account is a cross-check only.",rows:[
+   ["PARTNER_ID","join key"],["CSP_ID","new-system csp_id assigned at Step 1"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::text","MINT","VARCHAR PK (V9 changed id UUID→varchar)"],
+  ["csp_id","csp_account.csp_id WHERE partner_id={partner_id}","LOOKUP","⚠ from Step-1 Excel output tab (no csp_account row until onboarding)"],
+  ["composite_state","'COMPLIANT'","CONST","FK ref_composite_sla_states; seed all migrated CSPs COMPLIANT (prior cohort did the same)"],
+  ["active_connection_count","AVG active connections, trailing 15d","OLD","CONNECTION_LIFECYCLE_CONNECTIONS count per csp_id"],
+  ["visibility_state_changed_at","NULL","NULL","set on first state transition"],
+  ["failing_metric_count","0","CONST","V10 — NOT NULL DEFAULT 0"],
+  ["tier_band","NULL","NULL","V15 — first evaluation cycle populates"],
+  ["version","0","CONST","@Version seed"],
+  ["correlation_id","'csp-migration-<batch>'","CONST","audit"],
+  ["causation_id","'csp-migration-<batch>'","CONST","audit"],
+  ["created_at","now()","CONST",""],
+  ["updated_at","now()","CONST",""]
+ ]
+},
+{id:"install",title:"install_maturation_ledger",neuTitle:"install_maturation_ledger (11 cols — verified vs V12; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M1 install ratio",
+ desc:"One row per install (per connection) recording its terminal outcome for the rolling 60-day M1 install-success-ratio window. numerator = matured-active installs; denominator = all terminal installs.",
+ warn:"terminal_state is CHECK-constrained to EXACTLY: CONNECTION_ACTIVE, FAILED, CANCELLED_ONSITE, EXPIRED, CANCELLED_BY_UPSTREAM, CANCELLED_BY_CUSTOMER. UNIQUE on connection_id (one row per connection). Source→ledger mapping (verified via DBT_CSP.TAS_REF_INSTALL_CANDIDATE_STATE where IS_TERMINAL_FLAG=true): INSTALLATION_REPORTED_FAILED→FAILED · INSTALLATION_CANCELLED_ONSITE→CANCELLED_ONSITE · INSTALLATION_EXPIRED→EXPIRED · CONNECTION_ACTIVE / CANCELLED_BY_UPSTREAM / CANCELLED_BY_CUSTOMER pass through. Only terminal candidates seed (in-progress states excluded).",
+ old:[{t:"DBT_CSP.FACT_INSTALL_CANDIDATES / booking-to-install journey (Snowflake)",rows:[
+   ["connection_id","new CL connection_id for the install"],
+   ["terminal outcome","install end state → terminal_state (mapped to the 6 allowed codes)"],
+   ["slot_confirmed_at","install slot-confirmation time"],
+   ["matured_at","terminal outcome timestamp (within 60d window)"],
+   ["install_source","filter new_app installs"],
+   ["Row selection","one row per connection_id; installs maturing in trailing 60 days"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::text","MINT","VARCHAR PK"],
+  ["csp_id","csp_account.csp_id WHERE partner_id={partner_id}","LOOKUP","⚠ Step-1 Excel"],
+  ["connection_id","new CL connection_id","LOOKUP","resolved old install → new connection; UNIQUE per row"],
+  ["terminal_state","mapped install outcome","OLD","one of the 6 CHECK codes"],
+  ["numerator_delta","1 if terminal_state=CONNECTION_ACTIVE else 0","RULE","matured-active counts toward M1 numerator"],
+  ["denominator_delta","1 ONLY for CONNECTION_ACTIVE + FAILED","RULE","⚠ cancellations/expiry (CANCELLED_BY_UPSTREAM/CUSTOMER/ONSITE, EXPIRED) → 0 — prod + 2026-05-20 workbook confirmed; prior 'den=1 always' deflates M1"],
+  ["slot_confirmed_at","old slot-confirmed time","OLD",""],
+  ["matured_at","terminal outcome time","OLD",""],
+  ["version","0","CONST",""],
+  ["created_at","now()","CONST",""],
+  ["updated_at","now()","CONST",""]
+ ]
+},
+{id:"rating",title:"customer_rating_records",neuTitle:"customer_rating_records (9 cols — verified vs V13; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M5 customer rating",
+ desc:"One row per individual customer rating (1–5) for a connection. Supports multiple ratings per connection. Feeds the M5 customer-rating metric.",
+ warn:"event_id is UNIQUE + NOT NULL (idempotency key) — the source rating has no new-system event_id, so MINT a fresh UUID per rating row at migration. rating must be 1–5 (CHECK).",
+ old:[{t:"DBT_RATING_SERVICE.RATING (Snowflake) — customer ratings",rows:[
+   ["SENDER_ACCOUNT_ID","the customer who gave the rating"],
+   ["RECEIVER_ACCOUNT_ID","rated party (partner / connection)"],
+   ["RATING","1–5 → rating"],
+   ["CREATED_AT","→ submitted_at"],
+   ["Row selection","ratings for migrated CSPs' connections; resolve to new connection_id"]
+ ]},{t:"CSP · csp_account + CL connections",input:true,note:"Resolve rated party/customer → new csp_id + connection_id.",rows:[
+   ["partner_id → CSP_ID","csp_account"],["customer/connection → CONNECTION_ID","CL connections"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::text","MINT","VARCHAR PK"],
+  ["csp_id","csp_account.csp_id","LOOKUP","⚠ Step-1 Excel"],
+  ["connection_id","new CL connection_id","LOOKUP","resolved from rated connection / customer"],
+  ["rating","RATING","OLD","DBT_RATING_SERVICE.RATING.RATING (1–5)"],
+  ["submitted_at","CREATED_AT","OLD","rating creation time"],
+  ["event_id","gen_random_uuid()::text","MINT","UNIQUE idempotency key — minted at migration"],
+  ["version","0","CONST",""],
+  ["created_at","now()","CONST",""],
+  ["updated_at","now()","CONST",""]
+ ]
+},
+{id:"telemetry",title:"telemetry_rollup_records",neuTitle:"telemetry_rollup_records (11 cols — verified vs V14+V25; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · T1 optical / T2 speed",
+ desc:"One row per CSP per signal_date holding daily optical (in-range pings) and speed (peak-hour OK tests) numerator/denominator counts, accumulated over the 60-day tier window. Produced by the csp-quality-rollup pipeline (rollup-v1.0/v2) over Snowflake ping + speedtest tables.",
+ warn:"TWO fixes vs the 2026-05-20 telemetry CSV. (1) V25 RENAMED columns: observation_date→signal_date, oor_ping_count→optical_numerator, total_ping_count→optical_denominator, peak_ok_count→speed_numerator, peak_total_count→speed_denominator (and TRUNCATEd old rows). (2) optical_numerator is IN-RANGE pings, NOT out-of-range — the prior INSERT loaded the OOR count (e.g. 11374) which after the rename inverts the optical metric to 22.1% instead of 77.9%. Use OPTICAL_IN_RANGE_PINGS (e.g. 40099) for optical_numerator. VERIFIED 2026-06-15 vs live prod: this table is maintained by the live csp-quality-rollup pipeline (rows dated 2026-06-13, optical avg 76.7%, 0 rows with numerator>denominator) — so prod is already correct; the inversion risk applies ONLY to a hand-written backfill that naively reuses the old CSV. Prefer running the rollup pipeline in backfill mode for the new cohort.",
+ old:[{t:"csp-quality-rollup pipeline — Snowflake DBT.HOURLY_DEVICE_PING_INFLUX (optical) + speedtest tables",rows:[
+   ["SIGNAL_DATE","per-day → signal_date"],
+   ["OPTICAL_IN_RANGE_PINGS","in-range pings → optical_numerator  ⚠ (NOT the OOR count)"],
+   ["OPTICAL_TOTAL_PINGS","total pings → optical_denominator"],
+   ["SPEED_OK_TESTS","peak-hour OK speed tests → speed_numerator"],
+   ["SPEED_TOTAL_TESTS","total peak-hour speed tests → speed_denominator"],
+   ["Exclusions / key","TP-Link devices excluded; PARTNER_ID → csp_id"],
+   ["Row selection","one row per (csp_id, signal_date), trailing 60 days; UNIQUE(csp_id, signal_date)"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::text","MINT","VARCHAR PK"],
+  ["csp_id","csp_account.csp_id WHERE partner_id={PARTNER_ID}","LOOKUP","⚠ Step-1 Excel"],
+  ["signal_date","SIGNAL_DATE","OLD","renamed from observation_date (V25)"],
+  ["optical_numerator","OPTICAL_IN_RANGE_PINGS","RULE","⚠ IN-RANGE pings — prior CSV wrongly used the OOR count; renamed from oor_ping_count (V25)"],
+  ["optical_denominator","OPTICAL_TOTAL_PINGS","OLD","renamed from total_ping_count (V25)"],
+  ["speed_numerator","SPEED_OK_TESTS","OLD","renamed from peak_ok_count (V25)"],
+  ["speed_denominator","SPEED_TOTAL_TESTS","OLD","renamed from peak_total_count (V25)"],
+  ["rollup_event_id","gen_random_uuid()::text","MINT","pipeline rollup event id"],
+  ["version","0","CONST",""],
+  ["created_at","now()","CONST",""],
+  ["updated_at","now()","CONST",""]
+ ]
+},
+{id:"complaintledger",title:"complaint_resolution_ledger",neuTitle:"complaint_resolution_ledger (13 cols — verified vs V18; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M3 TAT / M4 unresolved / M6 ratio",
+ desc:"One row per RESOLVED complaint over the metric window — the source for M3 (TAT pass rate), M4 (unresolved fraction) and M6 (complaint ratio). This is a QUALITY table, NOT the SR complaints table. The 2026-05-20 workbook's 'complaints' sheet seeded THIS table (995 rows); the current strategy had omitted it.",
+ warn:"⚠ ADDED after reviewing the prior-migration workbook — was missing from the first cut (M3/M4/M6 would have had no seed). primary_class ∈ {INSTALLATION_DEFECT, SERVICE_ISSUE, SYSTEM_ANOMALY} — the workbook's CONNECTION_QUALITY was REMOVED from ref_complaint_primary_classes, so remap it. outcome ∈ {RESOLVED, UNRESOLVABLE}. complaint_id is VARCHAR UNIQUE — use KAPTURE_TICKET_ID for idempotent re-runs (there is no separate ticket_id column).",
+ old:[{t:"DBT.SERVICE_TICKET_MODEL (Snowflake) — RESOLVED tickets, metric window",rows:[
+   ["KAPTURE_TICKET_ID","→ complaint_id (UNIQUE idempotency key)"],
+   ["LAST_TITLE","→ primary_class (classify to the 3 current codes; ILIKE)"],
+   ["TICKET_ADDED_TIME / FINAL_RESOLVED_TIME","→ opened_at / resolved_at → TAT calc"],
+   ["CUSTOMER_ACCOUNT_ID","→ customer → connection_id / csp_id"],
+   ["Filter / window","IS_RESOLVED=1; resolved within the M6 rolling 60d window"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::text","MINT","VARCHAR PK"],
+  ["complaint_id","KAPTURE_TICKET_ID","OLD","UNIQUE — idempotent key (no ticket_id col)"],
+  ["csp_id","csp_account.csp_id","LOOKUP","⚠ Step-1 Excel"],
+  ["connection_id","new CL connection_id","LOOKUP","via CUSTOMER_ID"],
+  ["primary_class","classified","RULE","INSTALLATION_DEFECT / SERVICE_ISSUE / SYSTEM_ANOMALY (remap workbook CONNECTION_QUALITY)"],
+  ["opened_at","TICKET_ADDED_TIME","OLD",""],
+  ["resolved_at","FINAL_RESOLVED_TIME","OLD",""],
+  ["tat_window_hours","4","CONST","⚠ confirm SLA window (prod=4h for service issues)"],
+  ["resolved_within_tat","(resolved−opened) ≤ tat_window_hours","RULE","boolean"],
+  ["still_open_at_48h","resolved>48h after open OR unresolved","RULE","NOT NULL boolean"],
+  ["event_id","gen_random_uuid()::text","MINT",""],
+  ["outcome","'RESOLVED'","CONST","RESOLVED / UNRESOLVABLE"],
+  ["created_at","now()","CONST",""]
+ ]
+}
+];
+
 // ---- Compensation & Payment DB schema panes ----
 function newSchemaCard(label,svc,rows){
   const r=rows.map(r=>`<tr class="t-${r[2]}"><td class="f">${esc(r[0])}</td><td class="v">${esc(r[1])}</td><td class="s"><span class="chip ${r[2]}">${r[2]}</span> ${esc(r[3]||"")}</td></tr>`).join("");
@@ -972,6 +1233,7 @@ function buildDBPane(dbKey,tbl){
 }
 COMP_TABLES.forEach(t=>buildDBPane("comp",t));
 PAY_TABLES.forEach(t=>buildDBPane("pay",t));
+QUAL_TABLES.forEach(t=>buildDBPane("qual",t));
 
 function showDBWorkflow(dbKey,tables,label){
   setTop(dbKey);
@@ -999,11 +1261,11 @@ function showWorkflow(wfk){
   });
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
-const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc"};
+const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc",asvc:"pane_asvc"};
 const LINKTAB={install:"https://ashish-raj-wiom.github.io/csp-installation-migration/"};
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["svc","Service Tickets"],["comp","Compensation DB"],["pay","Payment DB"],["install","Installation tasks ↗"]].forEach(([k,lbl])=>{
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["asvc","Active Service tickets"],["svc","Quality - Service tickets"],["qual","Quality OS"],["comp","Compensation DB"],["pay","Payment DB"],["install","Installation tasks ↗"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
-  b.onclick=()=> LINKTAB[k]?window.open(LINKTAB[k],"_blank"):STATICTAB[k]?showStatic(k,STATICTAB[k]):k==="comp"?showDBWorkflow("comp",COMP_TABLES,"Compensation DB"):k==="pay"?showDBWorkflow("pay",PAY_TABLES,"Payment DB"):showWorkflow(k);
+  b.onclick=()=> LINKTAB[k]?window.open(LINKTAB[k],"_blank"):STATICTAB[k]?showStatic(k,STATICTAB[k]):k==="comp"?showDBWorkflow("comp",COMP_TABLES,"Compensation DB"):k==="pay"?showDBWorkflow("pay",PAY_TABLES,"Payment DB"):k==="qual"?showDBWorkflow("qual",QUAL_TABLES,"Quality OS"):showWorkflow(k);
   tabsEl.appendChild(b);
 });
 showApproach();

@@ -672,7 +672,7 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
   ];
   const pane=document.createElement("div");pane.className="casepane";pane.id="pane_svc";
   pane.innerHTML=`
-   <div class="banner" style="border-left-color:#7c2d12"><b>Service Tickets — single case (connection × complaint, end state ASSIGNED)</b>
+   <div class="banner" style="border-left-color:#7c2d12"><b>Quality — Service Tickets — single case (migration: pre-minted complaint_id)</b>
      <div class="rule" style="margin-top:6px">Central entity = CLOS connections × SRS <code>complaints</code>. We create complaints only for the <b>ASSIGNED</b> end state. <b>A connection in ANY state can have a ticket created</b> — the only requirement is that the connection exists. Three fields are fetched from the old source (<code>customer_id</code>, <code>ticket_id</code>, <code>problem</code>); SRS then resolves <code>connection_id / zone_id / csp_id</code>, classifies the problem, and the downstream TAS restore candidate is created on ASSIGNED.</div>
    </div>
    <div class="hilite"><b>Ticket titles in scope (5)</b> — all classify to SERVICE_ISSUE → RESTORE → ASSIGNED: Internet Supply Down · Recharge done but internet not working · Frequent Disconnection · Slow Speed/Range Issues · Optical Power Out of Range. Plan-active (15-day) check is <b>NOT used</b>.</div>
@@ -689,6 +689,135 @@ const tabsEl=document.getElementById("tabs"), subTabsEl=document.getElementById(
      <div><div class="side-title">OLD WORLD (source)</div>
        <div class="card"><h3>DBT.SERVICE_TICKET_MODEL (Snowflake) — old Kapture tickets</h3>
          <div class="cnote">Source for the 3 fetched fields. Filter: <code>LAST_TITLE</code> in the 5 in-scope titles AND <code>IS_RESOLVED = 0</code>. Plan-active check not used. Anti-join <code>DBT_CSP.DIM_CSP</code> to skip already-migrated CSPs. ⚠ <b>Verified 2026-06-15:</b> <code>LAST_TITLE</code> is prefixed/variant (e.g. <code>Internet Issues|Internet Supply Down</code>, <code>"Recharge done, but internet not working (RDNI)"</code>) — match via <b>ILIKE normalization, not literal equality</b> (literal <code>IN(…)</code> returns 0 rows).</div>
+         <table>
+           <tr><td class="f">CUSTOMER_ACCOUNT_ID</td><td class="v" colspan="2">→customer_id</td></tr>
+           <tr><td class="f">KAPTURE_TICKET_ID</td><td class="v" colspan="2">→ticket_id</td></tr>
+           <tr><td class="f">LAST_TITLE</td><td class="v" colspan="2">→problem (one of the 5 titles)</td></tr>
+           <tr><td class="f">IS_RESOLVED</td><td class="v" colspan="2">filter = 0 (open)</td></tr>
+           <tr><td class="f">CURRENT_PARTNER_ACCOUNT_ID</td><td class="v" colspan="2">anti-join vs already-migrated CSPs</td></tr>
+         </table></div>
+     </div>
+     <div><div class="side-title newW">NEW WORLD — 3 target tables</div>${newCard("complaints",complaints)}${newCard("ctasks",ctasks)}${newCard("restcand",restcand)}</div>
+   </div>`;
+  panesEl.appendChild(pane);
+})();
+
+// ---- ACTIVE Service Tickets pane (main original — live SRS-intake flow) ----
+(function(){
+  const complaints=[
+   ["complaint_id","gen_random_uuid()","SYS","PK (SRS-generated)"],
+   ["connection_id","‹resolved›","DERIVED","resolved by SRS from CL by-customer lookup"],
+   ["zone_id","‹resolved›","DERIVED","from the resolved connection"],
+   ["customer_id","‹customer_account_id›","OLD","SERVICE_TICKET_MODEL.CUSTOMER_ACCOUNT_ID"],
+   ["csp_id","‹resolved CSP›","DERIVED","from the resolved connection"],
+   ["status","ASSIGNED","CONST","INTAKE→CLASSIFIED→ASSIGNED, synchronous in the POST"],
+   ["primary_class","SERVICE_ISSUE","DERIVED","classified from problem title"],
+   ["secondary_subtype","NO_INTERNET / SLOW_INTERNET / FREQUENT_DISCONNECTION / RECHARGE_DONE_NO_INTERNET / OPTICAL_POWER_OUT_OF_RANGE","DERIVED","classified from problem title"],
+   ["intake_channel","CALL_CENTER","CONST","call-center intake"],
+   ["executor_type","CSP","DERIVED","SERVICE_ISSUE → CSP"],
+   ["executor_id","‹resolved CSP›","DERIVED","= csp_id"],
+   ["ticket_id","‹kapture_ticket_id›","OLD","SERVICE_TICKET_MODEL.KAPTURE_TICKET_ID (V11)"],
+   ["intake_timestamp","now()","SYS",""],
+   ["classification_timestamp","now()","SYS",""],
+   ["assigned_at","now()","SYS",""],
+   ["sla_at","computed (working-hrs)","DERIVED","classification + first-response SLA (V13)"],
+   ["within_tat","NULL","NULL","set at resolution (V13)"],
+   ["escalation_count / escalation_tier","0","SYS","default"],
+   ["submission_count","1","SYS","default"],
+   ["contact_attempt_count","0","SYS","default"],
+   ["signal_emitted","false","SYS","default"],
+   ["is_reopen / reopen_count","false / 0","SYS","default"],
+   ["lineage_id","NULL","NULL",""],
+   ["resolution_outcome / unresolvable_reason","NULL","NULL","resolution-phase"],
+   ["verification_method / customer_verification_outcome","NULL","NULL","verification-phase"],
+   ["complaint_resolution_minutes / verification_latency_minutes","NULL","NULL",""],
+   ["verification_started_at / resolved_at / closed_timestamp","NULL","NULL",""],
+   ["resolution_type","NULL","NULL","V9 device-swap"],
+   ["device_swap_old_device_id / new_device_id / initiated_at / completed_at","NULL","NULL","V9"],
+   ["version","1","SYS","@Version"],
+   ["correlation_id","'csp-migration-<batch>'","CONST","audit"],
+   ["causation_id","NULL","SYS",""],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const ctasks=[
+   ["task_id","gen_random_uuid()","SYS","PK"],
+   ["complaint_id","‹complaint_id›","DERIVED","FK to complaints"],
+   ["executor_type","CSP","DERIVED",""],
+   ["executor_id","‹resolved CSP›","DERIVED",""],
+   ["task_type","RESTORE","DERIVED","SERVICE_ISSUE → RESTORE"],
+   ["zone_id","‹resolved›","DERIVED","from complaint"],
+   ["status","OPEN","CONST",""],
+   ["response_sla_deadline","now + first_response_sla","DERIVED",""],
+   ["reassignment_count","0","SYS","default"],
+   ["first_response_at","NULL","NULL","V12; set when CSP first responds"],
+   ["diagnosis_outcome / diagnosis_fault_type","NULL","NULL","V9"],
+   ["version","1","SYS","@Version"],
+   ["correlation_id / causation_id","corr-id / NULL","CONST",""],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const restcand=[
+   ["execution_candidate_id","gen_random_uuid()","SYS","PK"],
+   ["state_version","0","SYS","default"],
+   ["authority_entity_id","‹complaint_id›","DERIVED","= complaint_id (from event)"],
+   ["csp_id","‹resolved CSP›","DERIVED","from event"],
+   ["candidate_type","RESTORE","CONST",""],
+   ["state","PENDING_ACCEPTANCE","CONST","initial restore state"],
+   ["task_family","RESTORE","CONST",""],
+   ["aggregation_type","INDIVIDUAL","CONST",""],
+   ["reason_code","‹restore reason›","DERIVED","from event"],
+   ["reason_display_template","‹template›","CONST",""],
+   ["deadline_at","= sla_at","DERIVED","from event (V1.6.2)"],
+   ["object_id","‹complaint/connection ref›","DERIVED","NOT NULL"],
+   ["locality","‹zone_id›","DERIVED","NOT NULL"],
+   ["batch_key / incident_key","NULL","NULL","INDIVIDUAL"],
+   ["is_csp_actionable","true","CONST",""],
+   ["threshold_state","NORMAL","CONST",""],
+   ["complaint_id","‹complaint_id›","DERIVED","from event"],
+   ["task_id","‹task_id›","DERIVED","from event"],
+   ["primary_class","SERVICE_ISSUE","DERIVED",""],
+   ["secondary_subtype","‹subtype›","DERIVED",""],
+   ["connection_id","‹connection_id›","DERIVED","from event"],
+   ["zone_id","‹zone_id›","DERIVED","from event"],
+   ["latest_attention_at","now()","SYS",""],
+   ["latest_attention_version","1","SYS",""],
+   ["latest_attention_type","STATE_CHANGE","CONST",""],
+   ["latest_attention_reason","‹reason›","DERIVED",""],
+   ["acked_attention_version","0","SYS","unviewed"],
+   ["escalation_note","NULL","NULL","V040"],
+   ["system_verification_result","NOT_RUN","CONST","V040"],
+   ["customer_verification_result","NOT_RUN","CONST","V040"],
+   ["diagnosis_device_id / diagnosis_fault_code","NULL","NULL","V040"],
+   ["assigned_technician_id","NULL","NULL","V040"],
+   ["ticket_id","‹kapture_ticket_id›","DERIVED","V049 (from event)"],
+   ["customer_account_id","‹customer_id›","DERIVED","V049 (NOT NULL default '')"],
+   ["customer_name","‹enrichment›","API","V049 GetCustomerByAccount"],
+   ["customer_mobile","‹enrichment›","API","V049"],
+   ["customer_address","‹enrichment›","API","V049"],
+   ["google_address_id","‹enrichment›","API","V049"],
+   ["device_id","‹enrichment›","API","V049"],
+   ["isp_identifier_type / isp_identifier_value","‹enrichment›","API","V049"],
+   ["enrichment_retry_count","0","SYS","V049"],
+   ["resolved_by_actor_id / resolved_by_actor_type","NULL","NULL","V067"],
+   ["created_at / updated_at","now()","SYS",""]
+  ];
+  const pane=document.createElement("div");pane.className="casepane";pane.id="pane_asvc";
+  pane.innerHTML=`
+   <div class="banner" style="border-left-color:#7c2d12"><b>Active Service Tickets — single case (live SRS-intake flow)</b>
+     <div class="rule" style="margin-top:6px">Central entity = CLOS connections × SRS <code>complaints</code>. We create complaints only for the <b>ASSIGNED</b> end state. <b>A connection in ANY state can have a ticket created</b> — the only requirement is that the connection exists. Three fields are fetched from the old source (<code>customer_id</code>, <code>ticket_id</code>, <code>problem</code>); SRS then resolves <code>connection_id / zone_id / csp_id</code>, classifies the problem, and the downstream TAS restore candidate is created on ASSIGNED.</div>
+   </div>
+   <div class="hilite"><b>Ticket titles in scope (5)</b> — all classify to SERVICE_ISSUE → RESTORE → ASSIGNED: Internet Supply Down · Recharge done but internet not working · Frequent Disconnection · Slow Speed/Range Issues · Optical Power Out of Range. Plan-active (15-day) check is <b>NOT used</b>.</div>
+   <div class="legend" style="padding:0 0 12px">
+     <span class="lbl">Tags:</span>
+     <span class="chip OLD">OLD — from old source</span>
+     <span class="chip DERIVED">DERIVED — SRS resolves/classifies at intake</span>
+     <span class="chip API">API — i2e1 customer enrichment</span>
+     <span class="chip CONST">CONST — flow constant</span>
+     <span class="chip SYS">SYS — system / default</span>
+   </div>
+   <div class="cols">
+     <div><div class="side-title">OLD WORLD (source)</div>
+       <div class="card"><h3>SERVICE_TICKET_MODEL (prod_db.public) — old Kapture tickets</h3>
+         <div class="cnote">Source for the 3 fetched fields. Filter: <code>LAST_TITLE IN (5 titles)</code> AND <code>IS_RESOLVED = 0</code>. Plan-active check not used. Anti-join <code>DBT_CSP.DIM_CSP</code> to skip already-migrated CSPs.</div>
          <table>
            <tr><td class="f">CUSTOMER_ACCOUNT_ID</td><td class="v" colspan="2">→customer_id</td></tr>
            <tr><td class="f">KAPTURE_TICKET_ID</td><td class="v" colspan="2">→ticket_id</td></tr>
@@ -1132,9 +1261,9 @@ function showWorkflow(wfk){
   });
   showPane(`pane_${wfk}_${wf.cases[0].id}`);
 }
-const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc"};
+const STATICTAB={approach:"pane_approach",sequencing:"pane_sequencing",zones:"pane_zones",svc:"pane_svc",asvc:"pane_asvc"};
 const LINKTAB={install:"https://ashish-raj-wiom.github.io/csp-installation-migration/"};
-[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["svc","Service Tickets"],["qual","Quality OS"],["comp","Compensation DB"],["pay","Payment DB"],["install","Installation tasks ↗"]].forEach(([k,lbl])=>{
+[["approach","Approach & Process"],["sequencing","Migration Sequencing"],["isp","ISP Recharge"],["netbox","Netbox / Devices"],["zones","Zones"],["asvc","Active Service tickets"],["svc","Quality - Service tickets"],["qual","Quality OS"],["comp","Compensation DB"],["pay","Payment DB"],["install","Installation tasks ↗"]].forEach(([k,lbl])=>{
   const b=document.createElement("button");b.className="toptab";b.dataset.k=k;b.textContent=lbl;
   b.onclick=()=> LINKTAB[k]?window.open(LINKTAB[k],"_blank"):STATICTAB[k]?showStatic(k,STATICTAB[k]):k==="comp"?showDBWorkflow("comp",COMP_TABLES,"Compensation DB"):k==="pay"?showDBWorkflow("pay",PAY_TABLES,"Payment DB"):k==="qual"?showDBWorkflow("qual",QUAL_TABLES,"Quality OS"):showWorkflow(k);
   tabsEl.appendChild(b);
