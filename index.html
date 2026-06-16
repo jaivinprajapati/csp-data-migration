@@ -987,7 +987,7 @@ const QUAL_TABLES=[
   ["connection_id","new CL connection_id","LOOKUP","resolved old install → new connection; UNIQUE per row"],
   ["terminal_state","mapped install outcome","OLD","one of the 6 CHECK codes"],
   ["numerator_delta","1 if terminal_state=CONNECTION_ACTIVE else 0","RULE","matured-active counts toward M1 numerator"],
-  ["denominator_delta","1","RULE","every terminal install counts toward denominator"],
+  ["denominator_delta","1 ONLY for CONNECTION_ACTIVE + FAILED","RULE","⚠ cancellations/expiry (CANCELLED_BY_UPSTREAM/CUSTOMER/ONSITE, EXPIRED) → 0 — prod + 2026-05-20 workbook confirmed; prior 'den=1 always' deflates M1"],
   ["slot_confirmed_at","old slot-confirmed time","OLD",""],
   ["matured_at","terminal outcome time","OLD",""],
   ["version","0","CONST",""],
@@ -1043,6 +1043,32 @@ const QUAL_TABLES=[
   ["version","0","CONST",""],
   ["created_at","now()","CONST",""],
   ["updated_at","now()","CONST",""]
+ ]
+},
+{id:"complaintledger",title:"complaint_resolution_ledger",neuTitle:"complaint_resolution_ledger (13 cols — verified vs V18; live-prod-confirmed 2026-06-15)",svc:"csp-quality-service · M3 TAT / M4 unresolved / M6 ratio",
+ desc:"One row per RESOLVED complaint over the metric window — the source for M3 (TAT pass rate), M4 (unresolved fraction) and M6 (complaint ratio). This is a QUALITY table, NOT the SR complaints table. The 2026-05-20 workbook's 'complaints' sheet seeded THIS table (995 rows); the current strategy had omitted it.",
+ warn:"⚠ ADDED after reviewing the prior-migration workbook — was missing from the first cut (M3/M4/M6 would have had no seed). primary_class ∈ {INSTALLATION_DEFECT, SERVICE_ISSUE, SYSTEM_ANOMALY} — the workbook's CONNECTION_QUALITY was REMOVED from ref_complaint_primary_classes, so remap it. outcome ∈ {RESOLVED, UNRESOLVABLE}. complaint_id is VARCHAR UNIQUE — use KAPTURE_TICKET_ID for idempotent re-runs (there is no separate ticket_id column).",
+ old:[{t:"DBT.SERVICE_TICKET_MODEL (Snowflake) — RESOLVED tickets, metric window",rows:[
+   ["KAPTURE_TICKET_ID","→ complaint_id (UNIQUE idempotency key)"],
+   ["LAST_TITLE","→ primary_class (classify to the 3 current codes; ILIKE)"],
+   ["TICKET_ADDED_TIME / FINAL_RESOLVED_TIME","→ opened_at / resolved_at → TAT calc"],
+   ["CUSTOMER_ACCOUNT_ID","→ customer → connection_id / csp_id"],
+   ["Filter / window","IS_RESOLVED=1; resolved within the M6 rolling 60d window"]
+ ]}],
+ neu:[
+  ["id","gen_random_uuid()::text","MINT","VARCHAR PK"],
+  ["complaint_id","KAPTURE_TICKET_ID","OLD","UNIQUE — idempotent key (no ticket_id col)"],
+  ["csp_id","csp_account.csp_id","LOOKUP","⚠ Step-1 Excel"],
+  ["connection_id","new CL connection_id","LOOKUP","via CUSTOMER_ID"],
+  ["primary_class","classified","RULE","INSTALLATION_DEFECT / SERVICE_ISSUE / SYSTEM_ANOMALY (remap workbook CONNECTION_QUALITY)"],
+  ["opened_at","TICKET_ADDED_TIME","OLD",""],
+  ["resolved_at","FINAL_RESOLVED_TIME","OLD",""],
+  ["tat_window_hours","4","CONST","⚠ confirm SLA window (prod=4h for service issues)"],
+  ["resolved_within_tat","(resolved−opened) ≤ tat_window_hours","RULE","boolean"],
+  ["still_open_at_48h","resolved>48h after open OR unresolved","RULE","NOT NULL boolean"],
+  ["event_id","gen_random_uuid()::text","MINT",""],
+  ["outcome","'RESOLVED'","CONST","RESOLVED / UNRESOLVABLE"],
+  ["created_at","now()","CONST",""]
  ]
 }
 ];
